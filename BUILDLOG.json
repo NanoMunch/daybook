@@ -1,8 +1,14 @@
 {
-  "version": "1.0.0",
-  "schemaVersion": 1,
-  "stagesDone": [1],
+  "version": "1.1.0",
+  "schemaVersion": 2,
+  "stagesDone": [1, 2],
   "changelog": [
+    {
+      "date": "2026-10-18",
+      "version": "1.1.0",
+      "stage": 2,
+      "summary": "Photo notes: camera or library from the capture bar (several at once), shrunk and re-saved on the phone without hidden metadata, thumbnails sized to the ruled lines, full-screen view with pinch/double-tap zoom, swipe between photos and Save via the share sheet, optional captions, delete with undo, photos included in encrypted backups and restore. Schema v2 adds a media store (additive migration from v1)."
+    },
     {
       "date": "2026-10-17",
       "version": "1.0.0",
@@ -13,7 +19,9 @@
   "knownIssues": [
     "Tested in headless Chromium only; not yet confirmed on a real iPhone (Safari/WebKit).",
     "The quick-capture bar lifts above the iOS keyboard using visualViewport; behaviour on the real keyboard is unverified.",
-    "Backups use the iOS share sheet (Save to Files); the download fallback is untested on iOS."
+    "Backups use the iOS share sheet (Save to Files); the download fallback is untested on iOS.",
+    "Backups are built in memory in one piece; with many hundreds of photos this may hit iPhone memory limits. Chunked backups may be needed later.",
+    "Photo picking, camera capture, HEIC handling and pinch zoom are untested on a real iPhone."
   ],
-  "nextUp": "Stage 2: photo notes (camera or library, compressed on the phone, stored as Blobs in a new IndexedDB store via a v1->v2 migration, thumbnails, full-screen view, optional caption, included in backups)."
+  "nextUp": "Stage 3: find anything (full-text search across notes and photo captions, results grouped by day with highlighted matches, plus On this day)."
 }

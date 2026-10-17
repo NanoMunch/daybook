@@ -5,7 +5,7 @@
  */
 'use strict';
 
-var VERSION = '1.0.0';
+var VERSION = '1.1.0';
 var CACHE = 'daybook-code-' + VERSION;
 var FILES = [
   './',
@@ -13,6 +13,7 @@ var FILES = [
   'css/app.css',
   'js/db.js',
   'js/backup.js',
+  'js/photos.js',
   'js/app.js',
   'manifest.webmanifest',
   'icons/icon.svg',
