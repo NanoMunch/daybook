@@ -1,0 +1,19 @@
+{
+  "version": "1.0.0",
+  "schemaVersion": 1,
+  "stagesDone": [1],
+  "changelog": [
+    {
+      "date": "2026-10-17",
+      "version": "1.0.0",
+      "stage": 1,
+      "summary": "Foundation: install screen, ruled day pages with timestamped notes, quick capture, edit and delete with undo, day flipping, date picker, offline service worker with update prompt, persistent storage request, CSP lockdown, encrypted backup and restore."
+    }
+  ],
+  "knownIssues": [
+    "Tested in headless Chromium only; not yet confirmed on a real iPhone (Safari/WebKit).",
+    "The quick-capture bar lifts above the iOS keyboard using visualViewport; behaviour on the real keyboard is unverified.",
+    "Backups use the iOS share sheet (Save to Files); the download fallback is untested on iOS."
+  ],
+  "nextUp": "Stage 2: photo notes (camera or library, compressed on the phone, stored as Blobs in a new IndexedDB store via a v1->v2 migration, thumbnails, full-screen view, optional caption, included in backups)."
+}

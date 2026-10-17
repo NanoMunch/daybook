@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#FBF9F4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1B2027" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Daybook">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="format-detection" content="telephone=no">
+  <title>Daybook</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css">
+  <script src="js/db.js" defer></script>
+  <script src="js/backup.js" defer></script>
+  <script src="js/app.js" defer></script>
+</head>
+<body>
+  <!-- Shown in a Safari tab: how to install. The notebook only runs from the home screen. -->
+  <section id="install" class="install" hidden>
+    <img class="install-icon" src="icons/icon-192.png" alt="" width="88" height="88">
+    <h1 class="install-title">Daybook</h1>
+    <p class="install-lede">A private, day-by-day notebook that lives only on this iPhone.</p>
+    <h2 class="install-heading">Add it to your home screen</h2>
+    <ol class="install-steps">
+      <li>Make sure this page is open in <strong>Safari</strong>.</li>
+      <li>Tap the <strong>Share</strong> button. On newer iPhones it’s inside the <strong>•••</strong> menu at the bottom right.</li>
+      <li>Tap <strong>Add to Home Screen</strong>. You may need to tap <strong>View More</strong> to see it. If you see <strong>Open as Web App</strong>, leave it on.</li>
+      <li>Tap <strong>Add</strong>, then open Daybook from your home screen.</li>
+    </ol>
+    <p class="install-note">From then on, always use the home-screen icon. Notes written there stay in that app, separate from Safari, and nothing is sent anywhere.</p>
+  </section>
+
+  <div id="app" class="app" hidden>
+    <div id="update-banner" class="update-banner" hidden>
+      <button type="button" id="update-button">Update available, tap to reload</button>
+    </div>
+
+    <header class="top">
+      <div class="top-row">
+        <button type="button" class="icon-btn settings-btn" id="open-settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <div class="dateline">
+          <h1 id="weekday" class="weekday">Today</h1>
+          <p id="fulldate" class="fulldate">&nbsp;</p>
+          <input type="date" id="date-picker" class="date-picker" aria-label="Choose a day">
+        </div>
+        <div class="nav">
+          <button type="button" class="icon-btn" id="prev-day" aria-label="Previous day">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" class="icon-btn" id="next-day" aria-label="Next day">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <button type="button" id="go-today" class="go-today" hidden aria-label="Back to today">Today</button>
+      </div>
+    </header>
+
+    <main id="page" class="page">
+      <div id="backup-nudge" class="nudge" hidden>
+        <p id="backup-nudge-text" class="nudge-text"></p>
+        <div class="nudge-actions">
+          <button type="button" class="btn btn-quiet" id="nudge-later">Later</button>
+          <button type="button" class="btn btn-primary" id="nudge-backup">Back up</button>
+        </div>
+      </div>
+      <div id="sheet-turn" class="sheet-turn">
+        <div id="notes" class="notes"></div>
+        <p id="empty" class="empty" hidden></p>
+      </div>
+    </main>
+
+    <form id="capture" class="capture" autocomplete="off">
+      <textarea id="capture-text" class="capture-text" rows="1" placeholder="Write a note" aria-label="New note" enterkeyhint="enter"></textarea>
+      <button type="submit" id="capture-add" class="capture-add" disabled>Add</button>
+    </form>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+      <span id="toast-text"></span>
+      <button type="button" id="toast-undo" class="toast-undo">Undo</button>
+    </div>
+
+    <!-- Settings -->
+    <section id="settings" class="settings" hidden aria-labelledby="settings-title">
+      <div class="settings-bar">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="btn btn-quiet" id="close-settings">Done</button>
+      </div>
+      <div class="settings-body">
+        <section class="group">
+          <h3>Backups</h3>
+          <p id="last-backup" class="group-line"></p>
+          <div class="group-actions">
+            <button type="button" class="btn btn-primary" id="settings-backup">Back up now</button>
+            <button type="button" class="btn" id="settings-restore">Restore from a backup</button>
+          </div>
+          <p class="group-help">Your notes exist only on this iPhone. Deleting the Daybook icon deletes them. A backup is one encrypted file, locked with a password you choose, that you can keep in Files or anywhere you trust.</p>
+        </section>
+        <section class="group">
+          <h3>Storage</h3>
+          <dl class="facts">
+            <div><dt>Notes on this iPhone</dt><dd id="fact-notes">–</dd></div>
+            <div><dt>Space used</dt><dd id="fact-space">–</dd></div>
+            <div><dt>Kept safe from clearing</dt><dd id="fact-persist">–</dd></div>
+          </dl>
+        </section>
+        <section class="group">
+          <h3>Privacy</h3>
+          <p class="group-help">Everything you write is stored in this app on this iPhone and nowhere else. Daybook is locked so it can’t send anything over the internet. The only thing it downloads is new versions of its own code.</p>
+        </section>
+        <section class="group">
+          <h3>About</h3>
+          <dl class="facts">
+            <div><dt>Version</dt><dd id="fact-version">–</dd></div>
+          </dl>
+        </section>
+      </div>
+    </section>
+
+    <!-- Back up -->
+    <dialog id="backup-dialog" class="dialog" aria-labelledby="backup-title">
+      <form method="dialog" class="dialog-body" id="backup-form" novalidate>
+        <h2 id="backup-title">Back up your notes</h2>
+        <div data-step="password">
+          <p>Choose a password for this backup. You’ll need it to restore. It isn’t saved anywhere, so if you forget it, the backup can’t be opened by anyone, including you.</p>
+          <label class="field"><span>Password</span>
+            <input type="password" id="backup-pass" autocomplete="new-password" minlength="8"></label>
+          <label class="field"><span>Same password again</span>
+            <input type="password" id="backup-pass2" autocomplete="new-password" minlength="8"></label>
+          <p class="error" id="backup-error" role="alert" hidden></p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-quiet" data-close>Cancel</button>
+            <button type="submit" class="btn btn-primary" id="backup-encrypt">Encrypt backup</button>
+          </div>
+        </div>
+        <div data-step="working" hidden>
+          <p class="working" id="backup-working">Encrypting…</p>
+        </div>
+        <div data-step="ready" hidden>
+          <p id="backup-ready-text"></p>
+          <p class="hint">Tap Save, then choose <strong>Save to Files</strong> and pick a place you trust, such as On My iPhone or iCloud Drive.</p>
+          <p class="error" id="backup-save-error" role="alert" hidden></p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-quiet" data-close>Cancel</button>
+            <button type="button" class="btn btn-primary" id="backup-save">Save backup file</button>
+          </div>
+        </div>
+        <div data-step="done" hidden>
+          <p id="backup-done-text">Backup saved.</p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-primary" data-close>Done</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Restore -->
+    <dialog id="restore-dialog" class="dialog" aria-labelledby="restore-title">
+      <form method="dialog" class="dialog-body" id="restore-form" novalidate>
+        <h2 id="restore-title">Restore from a backup</h2>
+        <div data-step="choose">
+          <p>Pick a <strong>.daybook</strong> backup file, then enter the password you chose when you made it. Nothing changes until you confirm.</p>
+          <input type="file" id="restore-file" class="visually-hidden" tabindex="-1">
+          <button type="button" class="btn" id="restore-pick">Choose backup file</button>
+          <p class="hint" id="restore-filename" hidden></p>
+          <label class="field"><span>Backup password</span>
+            <input type="password" id="restore-pass" autocomplete="current-password"></label>
+          <p class="error" id="restore-error" role="alert" hidden></p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-quiet" data-close>Cancel</button>
+            <button type="submit" class="btn btn-primary" id="restore-open" disabled>Open backup</button>
+          </div>
+        </div>
+        <div data-step="working" hidden>
+          <p class="working">Unlocking backup…</p>
+        </div>
+        <div data-step="summary" hidden>
+          <p id="restore-summary"></p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-quiet" data-close>Cancel</button>
+            <button type="button" class="btn btn-primary" id="restore-confirm">Restore notes</button>
+          </div>
+        </div>
+        <div data-step="done" hidden>
+          <p id="restore-done-text"></p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-primary" data-close>Done</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+  </div>
+</body>
+</html>
