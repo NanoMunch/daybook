@@ -13,6 +13,7 @@
   --danger: #A3343F;
   --scrim: rgba(30, 42, 58, 0.36);
   --shadow: 0 10px 30px rgba(30, 42, 58, 0.16);
+  --mark: rgba(255, 209, 72, 0.6);   /* highlighter pen */
 
   --serif: ui-serif, "New York", "Iowan Old Style", Georgia, serif;
   --sans: system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
@@ -44,6 +45,7 @@
     --danger: #E48A93;
     --scrim: rgba(0, 0, 0, 0.5);
     --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    --mark: rgba(214, 168, 48, 0.36);
   }
 }
 
@@ -792,6 +794,226 @@ button {
   color: #A6A6A6;
 }
 
+/* ---------- On this day: a second slip, edged in ink blue ---------- */
+
+.look-back { box-shadow: inset 3px 0 0 var(--accent); }
+.look-back-title { margin-bottom: 2px; font-weight: 600; }
+.look-back-excerpt {
+  margin: 0 0 6px;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 16px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.look-back-more { margin: -4px 0 6px; font-size: 14px; color: var(--ink-soft); }
+.look-back-more:empty { display: none; }
+
+/* A note opened from search is swept with the highlighter, which then fades. */
+.note-body { border-radius: 4px; }
+.note.is-found .note-body { animation: found 1800ms ease-out; }
+@keyframes found {
+  0%, 40% { background: var(--mark); }
+  100% { background: transparent; }
+}
+
+/* ---------- Search: the index at the back of the book ---------- */
+
+.search {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  background: var(--paper);
+}
+/* The page itself appears at once (nothing shows through); the results settle in. */
+.search-sheet { animation: settle 180ms ease-out; }
+@keyframes settle { from { transform: translateY(12px); opacity: 0; } }
+.search-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: calc(var(--safe-top) + 8px) calc(var(--safe-right) + 4px) 10px calc(var(--safe-left) + 10px);
+  background: var(--paper);
+  border-bottom: 3px double var(--margin);
+}
+.search-field { position: relative; flex: 1; min-width: 0; }
+.search-glass {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  margin-top: -9px;
+  color: var(--ink-soft);
+  pointer-events: none;
+}
+.search-input {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 10px 44px 10px 40px;
+  border: 1px solid var(--rule);
+  border-radius: 22px;
+  background: var(--paper-raised);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 22px;
+  outline: none;
+  caret-color: var(--accent);
+  -webkit-appearance: none;
+  appearance: none;
+}
+.search-input:focus { border-color: var(--accent); }
+.search-input::placeholder { color: var(--ink-soft); opacity: 0.8; }
+.search-input::-webkit-search-cancel-button,
+.search-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
+.search-clear {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 22px;
+  background: transparent;
+  color: var(--ink-soft);
+}
+.search-done { flex: none; padding-left: 12px; padding-right: 12px; }
+
+/* The results are written on the same ruled paper, times in the margin. */
+.search-sheet {
+  min-height: calc(100% - 66px - var(--safe-top));
+  padding: var(--line) calc(var(--gutter) + var(--safe-right)) calc(var(--line) * 3 + var(--kb) + var(--safe-bottom)) var(--safe-left);
+  background-image:
+    linear-gradient(to right,
+      transparent calc(var(--safe-left) + var(--margin-x) - 1px),
+      var(--margin) calc(var(--safe-left) + var(--margin-x) - 1px),
+      var(--margin) calc(var(--safe-left) + var(--margin-x) + 0.5px),
+      transparent calc(var(--safe-left) + var(--margin-x) + 0.5px)),
+    repeating-linear-gradient(to bottom,
+      transparent 0,
+      transparent calc(var(--line) - 1px),
+      var(--rule) calc(var(--line) - 1px),
+      var(--rule) var(--line));
+}
+.search-status { margin-bottom: var(--line); }
+.search-status:empty { margin-bottom: 0; }
+.search-status p {
+  margin: 0;
+  padding-left: calc(var(--margin-x) + 12px);
+  font-size: 15px;
+  line-height: var(--line);
+  color: var(--ink-soft);
+}
+
+.result-day h3 { margin: 0; font: inherit; }
+.result-day-head {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  height: var(--line);
+  margin: 0;
+  padding: 0 0 0 calc(var(--margin-x) + 12px);
+  border: 0;
+  background: none;
+  text-align: left;
+  color: var(--ink);
+}
+/* a taller tap area that reaches up into the blank line above */
+.result-day-head::before { content: ""; position: absolute; left: 0; right: 0; top: -16px; bottom: 0; }
+.result-date {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--serif);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.result-ago {
+  flex: none;
+  font-size: 13px;
+  line-height: var(--line);
+  color: var(--ink-soft);
+}
+.result-list { margin: 0; padding: 0; list-style: none; }
+/* Each result keeps a blank line under it, as notes do; the blank line is part of the tap area. */
+.result {
+  display: grid;
+  grid-template-columns: var(--margin-x) minmax(0, 1fr) auto;
+  align-items: start;
+  width: 100%;
+  margin: 0;
+  padding: 0 0 var(--line);
+  border: 0;
+  background: none;
+  text-align: left;
+  color: inherit;
+}
+.result.has-thumb { min-height: calc(var(--line) * 3); }
+.result-time {
+  padding-right: 8px;
+  font-size: 12.5px;
+  line-height: var(--line);
+  text-align: right;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.result-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  min-width: 0;
+  padding-left: 12px;
+  border-radius: 4px;
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: var(--line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.result-text.is-quiet { font-style: italic; color: var(--ink-soft); }
+.result:active .result-text { background: color-mix(in srgb, var(--slip) 70%, transparent); }
+.result-thumb {
+  display: block;
+  width: 48px;
+  height: 48px;
+  margin: 4px 0 4px 10px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--slip);
+}
+.result-thumb:not([src]) { visibility: hidden; }
+.result-thumb.is-missing { visibility: visible; }
+
+/* Matches look marked with a highlighter: a slightly uneven stripe over the lower part of the word. */
+mark {
+  padding: 0 0.12em;
+  margin: 0 -0.12em;
+  border-radius: 0.35em 0.15em 0.4em 0.2em;
+  color: inherit;
+  background: linear-gradient(98deg, transparent 0.08em, var(--mark) 0.14em, var(--mark) calc(100% - 0.14em), transparent calc(100% - 0.06em)) 0 62% / 100% 72% no-repeat;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
@@ -799,6 +1021,22 @@ button {
 @media (min-width: 700px) {
   .page, .top { padding-left: calc(50vw - 340px); padding-right: calc(50vw - 340px); }
   .capture { padding-left: calc(50vw - 340px); padding-right: calc(50vw - 340px); }
+  .search-bar { padding-left: calc(50vw - 340px); padding-right: calc(50vw - 340px); }
+  .search-sheet {
+    padding-left: calc(50vw - 340px);
+    padding-right: calc(50vw - 340px);
+    background-image:
+      linear-gradient(to right,
+        transparent calc(50vw - 340px + var(--margin-x) - 1px),
+        var(--margin) calc(50vw - 340px + var(--margin-x) - 1px),
+        var(--margin) calc(50vw - 340px + var(--margin-x) + 0.5px),
+        transparent calc(50vw - 340px + var(--margin-x) + 0.5px)),
+      repeating-linear-gradient(to bottom,
+        transparent 0,
+        transparent calc(var(--line) - 1px),
+        var(--rule) calc(var(--line) - 1px),
+        var(--rule) var(--line));
+  }
   .page {
     background-image:
       linear-gradient(to right,

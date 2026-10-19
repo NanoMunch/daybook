@@ -594,6 +594,165 @@ function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFu
     await ctx.close();
   }
 
+  // 5. Search, looking back and On this day
+  {
+    const ctx = await browser.newContext(PHONE);
+    await ctx.addInitScript(STANDALONE);
+    const page = await ctx.newPage();
+    watch(page);
+    await page.goto(BASE);
+    await page.waitForSelector('#app:not([hidden])');
+    check('no On this day slip without earlier years', await page.isHidden('#look-back'));
+    await page.fill('#capture-text', 'Bought coffee beans');
+    await page.click('#capture-add');
+    await page.waitForFunction(() => document.querySelectorAll('.note').length === 1);
+
+    const seeded = await page.evaluate(async () => {
+      const pad = (n) => String(n).padStart(2, '0');
+      const key = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+      const at = (daysBack, yearsBack, h) => { const d = new Date(); d.setHours(h, 15, 0, 0); d.setFullYear(d.getFullYear() - yearsBack); d.setDate(d.getDate() - daysBack); return d; };
+      const mk = async (d, text) => { const n = { id: crypto.randomUUID(), day: key(d), createdAt: d.getTime(), updatedAt: d.getTime(), type: 'text', text }; await window.DaybookDB.putNote(n); return n; };
+      await mk(at(7, 0, 9), 'Called the plumber about the kitchen tap');
+      await mk(at(3, 0, 8), '<img src=x onerror="window.__xss=1"> ask the plumber again');
+      await mk(at(40, 0, 20), 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation. Saw a giraffe at the zoo.');
+      await mk(at(0, 1, 18), 'Sunset over the bay with Zoë');
+      await mk(at(0, 2, 9), 'First day at the new job');
+      const c = document.createElement('canvas'); c.width = 120; c.height = 90;
+      const g = c.getContext('2d'); g.fillStyle = '#c0392b'; g.fillRect(0, 0, 120, 90);
+      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.8));
+      const d = at(2, 0, 10); const noteId = crypto.randomUUID(); const mid = crypto.randomUUID();
+      await window.DaybookDB.addNoteWithMedia(
+        { id: noteId, day: key(d), createdAt: d.getTime(), updatedAt: d.getTime(), type: 'photo', text: 'Receipt for the garden hose', photos: [{ id: mid, w: 120, h: 90 }] },
+        [{ id: mid, noteId, blob, thumb: blob, type: 'image/jpeg', width: 120, height: 90, bytes: blob.size, createdAt: d.getTime() }]);
+      const y = new Date().getFullYear();
+      return { y1: String(y - 1), y2: String(y - 2) };
+    });
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#look-back:not([hidden])', { timeout: 5000 }).catch(() => {});
+    const slipTitle = await page.textContent('#look-back-title');
+    check('On this day slip shows earlier years on today\'s page', await page.isVisible('#look-back') && slipTitle === 'On this day in ' + seeded.y2 + ' and ' + seeded.y1, slipTitle);
+    check('slip quotes the most recent year\'s note and counts the rest', (await page.textContent('#look-back-excerpt')) === 'Sunset over the bay with Zoë' && (await page.textContent('#look-back-more')) === 'and 1 more note');
+    const alignedWithSlip = await page.$$eval('.note', (els) => {
+      const top = document.getElementById('page').getBoundingClientRect().top;
+      return els.every((e) => { const y = (e.getBoundingClientRect().top - top) % 28; return y < 0.6 || y > 27.4; });
+    });
+    check('notes stay on the ruled lines below the slip', alignedWithSlip);
+    await page.screenshot({ path: path.join(OUT, 'on-this-day.png') });
+
+    // Open search: empty box shows looking back
+    await page.click('#open-search');
+    await page.waitForSelector('#search:not([hidden])');
+    check('search opens with the cursor in the search box', await page.evaluate(() => document.activeElement.id === 'search-input'));
+    await page.waitForFunction(() => document.querySelectorAll('.result-day').length > 0);
+    const agoLabels = await page.$$eval('.result-ago', (els) => els.map((e) => e.textContent));
+    check('empty search shows a week ago and this date in earlier years', JSON.stringify(agoLabels) === '["A week ago","A year ago","2 years ago"]', JSON.stringify(agoLabels));
+    check('empty search explains what search covers', (await page.textContent('#search-status')).includes('Type to search every note'));
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(OUT, 'search-lookback.png') });
+
+    const typeQuery = async (q) => {
+      await page.fill('#search-input', q);
+      await page.waitForFunction((q) => document.getElementById('search-input').value === q && document.getElementById('search-status').textContent.length > 0, q);
+      await page.waitForTimeout(250);
+    };
+    await typeQuery('zoe');
+    check('accent-insensitive search with the original spelling highlighted', (await page.$$eval('mark', (m) => m.map((e) => e.textContent))).join() === 'Zoë');
+    await typeQuery('kitchen plumber');
+    check('every word must match, in any order', (await page.textContent('#search-status')) === '1 note on 1 day' && (await page.$$('.result')).length === 1, await page.textContent('#search-status'));
+    await typeQuery('plumber');
+    const order = await page.$$eval('.result-ago', (els) => els.map((e) => e.textContent));
+    check('results grouped by day, newest first', JSON.stringify(order) === '["3 days ago","A week ago"]', JSON.stringify(order));
+    const safe = await page.evaluate(() => ({ xss: window.__xss, imgs: document.querySelectorAll('.result-text img').length, text: document.querySelector('.result-text').textContent }));
+    check('note text shown as text, never run as code', safe.xss === undefined && safe.imgs === 0 && safe.text.startsWith('<img'), JSON.stringify(safe));
+    const ruled = await page.evaluate(() => {
+      const top = document.querySelector('.search-sheet').getBoundingClientRect().top;
+      return Array.from(document.querySelectorAll('.result-day-head, .result')).every((e) => { const y = (e.getBoundingClientRect().top - top) % 28; return y < 0.6 || y > 27.4; });
+    });
+    check('results sit on the ruled lines', ruled);
+    await page.screenshot({ path: path.join(OUT, 'search-light.png') });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.screenshot({ path: path.join(OUT, 'search-dark.png') });
+    await page.emulateMedia({ colorScheme: 'light' });
+
+    await typeQuery('receipt');
+    await page.waitForFunction(() => { const i = document.querySelector('.result-thumb'); return i && i.src.startsWith('blob:') && i.complete && i.naturalWidth > 0; }, null, { timeout: 5000 }).catch(() => {});
+    check('photo captions are searched and show a thumbnail', await page.evaluate(() => { const i = document.querySelector('.result-thumb'); return !!i && i.src.startsWith('blob:') && i.naturalWidth > 0; }));
+    await typeQuery('giraffe');
+    const long = await page.textContent('.result-text');
+    check('long notes are trimmed to show the match', long.startsWith('…') && long.includes('giraffe') && !long.includes('Lorem'), long);
+    await typeQuery('zzzz');
+    check('no matches explained', (await page.textContent('#search-status')).startsWith('No notes match “zzzz”.'));
+    await page.click('#search-clear');
+    await page.waitForFunction(() => document.getElementById('search-input').value === '' && document.querySelectorAll('.result-day').length === 3);
+    check('clear button empties the box and shows looking back again', true);
+
+    // Swiping inside search leaves the day alone
+    await page.evaluate(() => {
+      const target = document.querySelector('.search-sheet');
+      const mk = (x) => new Touch({ identifier: 3, target, clientX: x, clientY: 400 });
+      target.dispatchEvent(new TouchEvent('touchstart', { touches: [mk(300)], changedTouches: [mk(300)], bubbles: true }));
+      target.dispatchEvent(new TouchEvent('touchend', { touches: [], changedTouches: [mk(60)], bubbles: true }));
+    });
+    await page.waitForTimeout(300);
+    check('swiping in search doesn’t change the day', (await page.textContent('#fulldate')).startsWith('Today'));
+
+    // Open a result
+    await typeQuery('kitchen plumber');
+    await page.click('.result');
+    await page.waitForSelector('#search', { state: 'hidden' });
+    await page.waitForFunction(() => !!document.querySelector('.note.is-found'), null, { timeout: 5000 }).catch(() => {});
+    check('tapping a result opens that day at the note', !(await page.textContent('#fulldate')).startsWith('Today') &&
+      (await page.$eval('.note.is-found .note-text', (e) => e.textContent).catch(() => '')) === 'Called the plumber about the kitchen tap');
+    check('On this day slip only on today\'s page', await page.isHidden('#look-back'));
+    await page.screenshot({ path: path.join(OUT, 'found-note.png') });
+    await page.keyboard.press('/');
+    await page.waitForSelector('#search:not([hidden])');
+    check('the / key opens search, keeping the last search', (await page.inputValue('#search-input')) === 'kitchen plumber');
+    await page.waitForFunction(() => document.querySelectorAll('.result').length === 1);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#search', { state: 'hidden' });
+    check('Escape closes search', await page.evaluate(() => document.activeElement.id === 'open-search'));
+
+    // Day heading opens the day; Look back from the slip; Hide the slip
+    await page.click('#go-today');
+    await page.waitForSelector('#look-back:not([hidden])');
+    await page.click('#look-back-open');
+    await page.waitForSelector('#search:not([hidden])');
+    await page.waitForFunction(() => document.querySelectorAll('.result-day').length === 3);
+    check('Look back opens the looking-back list with an empty box', (await page.inputValue('#search-input')) === '');
+    await page.click('.result-day-head >> nth=2');
+    await page.waitForSelector('#search', { state: 'hidden' });
+    await page.waitForFunction((y) => document.getElementById('fulldate').textContent.includes(y), seeded.y2);
+    await page.waitForFunction(() => { const n = document.querySelector('.note-text'); return n && n.textContent === 'First day at the new job'; }, null, { timeout: 5000 }).catch(() => {});
+    check('tapping a day heading opens that day', (await page.textContent('.note-text')) === 'First day at the new job');
+    await page.click('#go-today');
+    await page.waitForSelector('#look-back:not([hidden])');
+    await page.click('#look-back-hide');
+    check('Hide puts the slip away', await page.isHidden('#look-back'));
+    await page.waitForFunction(() => window.DaybookDB.getMeta('lookBackHiddenDay').then((v) => !!v));
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => document.querySelectorAll('.note').length === 1);
+    await page.waitForTimeout(400);
+    check('a hidden slip stays hidden for the rest of today', await page.isHidden('#look-back'));
+
+    // Search works offline
+    await page.evaluate(() => navigator.serviceWorker.ready);
+    await ctx.setOffline(true);
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.click('#open-search');
+    await page.fill('#search-input', 'job');
+    await page.waitForFunction(() => document.querySelectorAll('.result').length === 1, null, { timeout: 5000 }).catch(() => {});
+    check('search works offline', (await page.$$('.result')).length === 1);
+    await ctx.setOffline(false);
+
+    const csp = await page.evaluate(() => window.__csp);
+    check('no CSP violations in search', csp.length === 0, JSON.stringify(csp));
+    await ctx.close();
+  }
+
   const appErrors = errors.filter((e) => !e.includes('example.com') && !e.includes('Content Security Policy') && !e.includes('net::ERR_INTERNET_DISCONNECTED'));
   check('no console errors', appErrors.length === 0, JSON.stringify(appErrors));
   await browser.close();

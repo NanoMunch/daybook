@@ -4,10 +4,12 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.1.0';
+  var APP_VERSION = '1.2.0';
   var DB = window.DaybookDB;
   var Backup = window.DaybookBackup;
   var Photos = window.DaybookPhotos;
+  var Search = window.DaybookSearch;
+  var MAX_RESULTS = 150;
   var DAY_MS = 86400000;
   var BACKUP_EVERY_DAYS = 7;
   var LINE = 28;
@@ -33,7 +35,8 @@
     backupFile: null,
     restoreBytes: null,
     restorePlan: null,
-    addingPhotos: false
+    addingPhotos: false,
+    search: { index: null, seq: 0, timer: null, urls: [] }
   };
 
   var viewer = { noteId: null, index: 0, url: null, ratio: 1, zoom: 1, fitW: 0, fitH: 0 };
@@ -61,6 +64,7 @@
   var fmtShort = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'long' });
   var fmtTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
   var fmtStamp = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  var fmtDayLong = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
   function formatBytes(n) {
     if (!isFinite(n)) return '–';
@@ -230,6 +234,7 @@
       state.notes = notes;
       state.media = media;
       renderNotes();
+      refreshLookBack();
       if (direction) {
         turnPage(direction);
         window.scrollTo(0, 0);
@@ -266,6 +271,18 @@
   function flashNote(id) {
     var el = state.els.get(id);
     if (el && !reduceMotion.matches) el.classList.add('is-flash');
+  }
+
+  // Scrolls a note into view and marks it briefly, as if with a highlighter.
+  function revealNote(id) {
+    var el = state.els.get(id);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center' });
+    el.classList.remove('is-found');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('is-found');
+    var target = el.querySelector('.note-edit-target');
+    if (target) target.focus({ preventScroll: true });
   }
 
   /* ---------------- Quick capture ---------------- */
@@ -795,13 +812,337 @@
     });
   }
 
+  /* ---------------- Search and looking back ---------------- */
+
+  function isSearchOpen() { return !$('search').hidden; }
+
+  // Whole days from `day` to today (positive means in the past).
+  function daysAgo(day) {
+    return Math.round((parseDay(todayKey()) - parseDay(day)) / DAY_MS);
+  }
+
+  function relativeDay(day) {
+    var n = daysAgo(day);
+    if (n === 0) return 'Today';
+    if (n === 1) return 'Yesterday';
+    if (n === -1) return 'Tomorrow';
+    if (n < 0) return 'In ' + plural(-n, 'day', 'days');
+    if (n < 7) return n + ' days ago';
+    if (n < 31) { var w = Math.floor(n / 7); return w === 1 ? 'A week ago' : w + ' weeks ago'; }
+    var a = parseDay(day);
+    var b = parseDay(todayKey());
+    var months = (b.getFullYear() - a.getFullYear()) * 12 + b.getMonth() - a.getMonth() - (b.getDate() < a.getDate() ? 1 : 0);
+    months = Math.max(1, months);
+    if (months < 12) return months === 1 ? 'A month ago' : months + ' months ago';
+    var years = Math.floor(months / 12);
+    return years === 1 ? 'A year ago' : years + ' years ago';
+  }
+
+  function monthBefore(key) {
+    var d = parseDay(key);
+    var y = d.getFullYear();
+    var m = d.getMonth() - 1;
+    if (m < 0) { m = 11; y -= 1; }
+    var last = new Date(y, m + 1, 0).getDate();
+    return dayKey(new Date(y, m, Math.min(d.getDate(), last), 12));
+  }
+
+  // The same date in another year, or null (29 February only exists in leap years).
+  function sameDateIn(key, year) {
+    var d = parseDay(key);
+    var c = new Date(year, d.getMonth(), d.getDate(), 12);
+    return c.getMonth() === d.getMonth() ? dayKey(c) : null;
+  }
+
+  /*
+   * Days worth looking back at, each with its notes: this date in every earlier
+   * year, and (when asked) a week ago and a month ago. Only days with notes.
+   */
+  function lookBackDays(includeRecent) {
+    var today = todayKey();
+    return DB.earliestDay().then(function (first) {
+      if (!first || first >= today) return [];
+      var list = [];
+      if (includeRecent) {
+        list.push({ day: addDays(today, -7), label: 'A week ago' });
+        list.push({ day: monthBefore(today), label: 'A month ago' });
+      }
+      var year = parseDay(today).getFullYear();
+      for (var y = year - 1; y >= +first.slice(0, 4); y--) {
+        var k = sameDateIn(today, y);
+        if (k) list.push({ day: k, label: year - y === 1 ? 'A year ago' : (year - y) + ' years ago', year: true });
+      }
+      return DB.notesForDays(list.map(function (x) { return x.day; })).then(function (found) {
+        return list.filter(function (x) {
+          return found.get(x.day) && found.get(x.day).length;
+        }).map(function (x) {
+          return { day: x.day, label: x.label, year: !!x.year, notes: found.get(x.day) };
+        });
+      });
+    });
+  }
+
+  function excerptOf(note) {
+    var text = String(note.text || '').trim().split('\n')[0];
+    if (text) return text;
+    var n = photosOf(note).length;
+    return n === 1 ? 'A photo' : n + ' photos';
+  }
+
+  // The "On this day" slip on today's page, when earlier years have notes on this date.
+  function refreshLookBack() {
+    var slip = $('look-back');
+    var today = todayKey();
+    if (state.day !== today) { slip.hidden = true; return Promise.resolve(); }
+    return Promise.all([DB.getMeta('lookBackHiddenDay'), lookBackDays(false)]).then(function (r) {
+      if (state.day !== today) return;
+      var years = r[1];
+      var show = years.length > 0 && r[0] !== today;
+      slip.hidden = !show;
+      if (!show) return;
+      var count = 0;
+      years.forEach(function (g) { count += g.notes.length; });
+      var names = years.map(function (g) { return g.day.slice(0, 4); }).reverse();
+      $('look-back-title').textContent = 'On this day in ' + sentence(names);
+      // The most recent year's first note, then how many more Look back will show.
+      $('look-back-excerpt').textContent = excerptOf(years[0].notes[0]);
+      $('look-back-more').textContent = count > 1 ? 'and ' + plural(count - 1, 'more note', 'more notes') : '';
+      alignToRules(slip);
+    }).catch(function () { slip.hidden = true; });
+  }
+
+  function openSearch(focusInput) {
+    if (isSearchOpen()) return;
+    closeViewer();
+    state.search.index = null;
+    $('search-status').textContent = '';
+    $('search-results').textContent = '';
+    $('search').hidden = false;
+    $('search').scrollTop = 0;
+    $('search-clear').hidden = !$('search-input').value;
+    // Focus while still inside the tap, or iOS won't bring up the keyboard.
+    if (focusInput === false) $('close-search').focus();
+    else $('search-input').focus();
+    commitEdit().then(function () {
+      return DB.allNotes();
+    }).then(function (notes) {
+      if (!isSearchOpen()) return;
+      state.search.index = Search.buildIndex(notes);
+      return renderSearch();
+    }).catch(function () {
+      setSearchStatus(['Couldn’t read your notes to search them. Close Daybook fully and open it again.']);
+    });
+  }
+
+  function closeSearch(restoreFocus) {
+    if (!isSearchOpen()) return;
+    clearTimeout(state.search.timer);
+    state.search.seq += 1;
+    state.search.index = null;
+    $('search-input').blur();
+    $('search').hidden = true;
+    clearSearchThumbs();
+    $('search-results').textContent = '';
+    if (restoreFocus) $('open-search').focus();
+  }
+
+  function clearSearchThumbs() {
+    state.search.urls.forEach(function (url) { URL.revokeObjectURL(url); });
+    state.search.urls = [];
+  }
+
+  function setSearchStatus(lines) {
+    var el = $('search-status');
+    el.textContent = '';
+    lines.forEach(function (line) {
+      var p = document.createElement('p');
+      p.textContent = line;
+      el.appendChild(p);
+    });
+  }
+
+  function searchSoon() {
+    $('search-clear').hidden = !$('search-input').value;
+    clearTimeout(state.search.timer);
+    state.search.timer = setTimeout(renderSearch, 120);
+  }
+
+  function renderSearch() {
+    clearTimeout(state.search.timer);
+    var index = state.search.index;
+    if (!index) return Promise.resolve();
+    var seq = ++state.search.seq;
+    var query = $('search-input').value;
+    $('search-clear').hidden = !query;
+    var r = Search.run(index, query);
+    if (!r.terms.length) return renderLookBackView(seq);
+
+    if (!r.notes.length) {
+      setSearchStatus([
+        'No notes match “' + query.trim() + '”.',
+        'Search finds notes and photo captions that contain every word you type, in any order.'
+      ]);
+      return drawGroups([], r.terms, seq);
+    }
+    var days = new Set(r.notes.map(function (n) { return n.day; })).size;
+    var shown = r.notes.slice(0, MAX_RESULTS);
+    if (shown.length < r.notes.length) {
+      setSearchStatus(['The newest ' + shown.length + ' of ' + r.notes.length + ' matching notes are shown. Add another word to narrow it down.']);
+    } else {
+      setSearchStatus([plural(r.notes.length, 'note', 'notes') + ' on ' + plural(days, 'day', 'days')]);
+    }
+    return drawGroups(Search.groupByDay(shown), r.terms, seq);
+  }
+
+  function renderLookBackView(seq) {
+    return lookBackDays(true).then(function (groups) {
+      if (seq !== state.search.seq) return;
+      setSearchStatus(groups.length
+        ? ['Type to search every note and photo caption.']
+        : ['Type to search every note and photo caption.',
+          'Notes from a week ago, a month ago and this date in earlier years will also show up here.']);
+      return drawGroups(groups, [], seq);
+    });
+  }
+
+  function appendMarked(el, text, ranges) {
+    var at = 0;
+    ranges.forEach(function (r) {
+      if (r[0] > at) el.appendChild(document.createTextNode(text.slice(at, r[0])));
+      var mark = document.createElement('mark');
+      mark.textContent = text.slice(r[0], r[1]);
+      el.appendChild(mark);
+      at = r[1];
+    });
+    if (at < text.length) el.appendChild(document.createTextNode(text.slice(at)));
+  }
+
+  function resultItem(note, terms, thumbs) {
+    var li = document.createElement('li');
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'result';
+
+    var time = document.createElement('time');
+    time.className = 'result-time';
+    time.dateTime = new Date(note.createdAt).toISOString();
+    time.textContent = fmtTime.format(note.createdAt);
+
+    var text = document.createElement('span');
+    text.className = 'result-text';
+    if (String(note.text || '').trim()) {
+      var sn = Search.snippet(note.text, terms);
+      if (sn.cutStart) text.appendChild(document.createTextNode('…'));
+      appendMarked(text, sn.text, sn.ranges);
+    } else {
+      text.classList.add('is-quiet');
+      text.textContent = excerptOf(note);
+    }
+    b.appendChild(time);
+    b.appendChild(text);
+
+    var photo = photosOf(note)[0];
+    if (photo) {
+      b.classList.add('has-thumb');
+      var img = document.createElement('img');
+      img.className = 'result-thumb';
+      img.alt = '';
+      img.width = 48;
+      img.height = 48;
+      img.decoding = 'async';
+      b.appendChild(img);
+      thumbs.push({ img: img, id: photo.id });
+    }
+    b.addEventListener('click', function () { openResult(note.day, note.id); });
+    li.appendChild(b);
+    return li;
+  }
+
+  function drawGroups(groups, terms, seq) {
+    var out = $('search-results');
+    clearSearchThumbs();
+    out.textContent = '';
+    var thumbs = [];
+    groups.forEach(function (g) {
+      var section = document.createElement('section');
+      section.className = 'result-day';
+      var h = document.createElement('h3');
+      var head = document.createElement('button');
+      head.type = 'button';
+      head.className = 'result-day-head';
+      var date = document.createElement('span');
+      date.className = 'result-date';
+      date.textContent = fmtDayLong.format(parseDay(g.day));
+      var ago = document.createElement('span');
+      ago.className = 'result-ago';
+      ago.textContent = g.label || relativeDay(g.day);
+      head.appendChild(date);
+      head.appendChild(ago);
+      head.addEventListener('click', function () { openResult(g.day, null); });
+      h.appendChild(head);
+      section.appendChild(h);
+      var list = document.createElement('ol');
+      list.className = 'result-list';
+      g.notes.forEach(function (note) { list.appendChild(resultItem(note, terms, thumbs)); });
+      section.appendChild(list);
+      out.appendChild(section);
+    });
+    if (!thumbs.length) return Promise.resolve();
+    return DB.getMedia(thumbs.map(function (t) { return t.id; })).then(function (media) {
+      if (seq !== state.search.seq || !isSearchOpen()) return;
+      thumbs.forEach(function (t) {
+        var m = media.get(t.id);
+        if (!m || !m.thumb) { t.img.classList.add('is-missing'); return; }
+        var url = URL.createObjectURL(m.thumb);
+        state.search.urls.push(url);
+        t.img.src = url;
+      });
+    }).catch(function () {});
+  }
+
+  // Opens a day from the results, scrolled to the note that was tapped.
+  function openResult(day, id) {
+    closeSearch(false);
+    goTo(day).then(function () {
+      if (id) revealNote(id);
+      else window.scrollTo(0, 0);
+    });
+  }
+
+  function bindSearch() {
+    var input = $('search-input');
+    $('open-search').addEventListener('click', function () { openSearch(true); });
+    $('close-search').addEventListener('click', function () { closeSearch(true); });
+    input.addEventListener('input', searchSoon);
+    input.addEventListener('keydown', function (e) {
+      // Search runs as you type; the keyboard's Search key just tucks the keyboard away.
+      if (e.key === 'Enter') { e.preventDefault(); renderSearch(); input.blur(); }
+    });
+    $('search-clear').addEventListener('click', function () {
+      input.value = '';
+      renderSearch();
+      input.focus();
+    });
+    $('search').addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); closeSearch(true); }
+    });
+    $('look-back-open').addEventListener('click', function () {
+      $('search-input').value = '';
+      openSearch(false);
+    });
+    $('look-back-hide').addEventListener('click', function () {
+      $('look-back').hidden = true;
+      DB.setMeta('lookBackHiddenDay', todayKey()).catch(function () {});
+    });
+  }
+
   /* ---------------- Swipe between days ---------------- */
 
   function bindSwipe() {
     var start = null;
     document.addEventListener('touchstart', function (e) {
       if (state.editing || e.touches.length !== 1) { start = null; return; }
-      if (e.target.closest('.capture, dialog, .settings, textarea, input, .nudge')) { start = null; return; }
+      if (e.target.closest('.capture, dialog, .settings, .search, textarea, input, .nudge')) { start = null; return; }
       var t = e.touches[0];
       start = { x: t.clientX, y: t.clientY, time: Date.now() };
     }, { passive: true });
@@ -838,10 +1179,11 @@
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
       var t = e.target;
       if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT')) return;
-      if (document.querySelector('dialog[open]') || !$('settings').hidden) return;
+      if (document.querySelector('dialog[open]') || !$('settings').hidden || isSearchOpen()) return;
       if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
       else if (e.key === 't') { e.preventDefault(); goTo(todayKey()); }
+      else if (e.key === '/') { e.preventDefault(); openSearch(true); }
     });
   }
 
@@ -1265,6 +1607,7 @@
     $('update-button').addEventListener('click', applyUpdate);
 
     bindDialogs();
+    bindSearch();
     bindViewer();
     bindSwipe();
     bindKeys();
@@ -1284,6 +1627,7 @@
     }, 60000);
     window.addEventListener('resize', function () {
       alignToRules($('backup-nudge'));
+      alignToRules($('look-back'));
       if (viewer.noteId) layoutViewer();
     });
 

@@ -122,6 +122,33 @@
     return tx('notes', 'readonly').then(function (s) { return promisify(s.notes.count()); });
   }
 
+  // Map of day -> that day's notes (in page order), for several days in one go.
+  function notesForDays(days) {
+    var found = new Map();
+    if (!days.length) return Promise.resolve(found);
+    return tx('notes', 'readonly').then(function (s) {
+      var index = s.notes.index('day');
+      days.forEach(function (day) {
+        var req = index.getAll(IDBKeyRange.only(day));
+        req.onsuccess = function () {
+          found.set(day, req.result.sort(function (a, b) { return a.createdAt - b.createdAt; }));
+        };
+      });
+      return txDone(s.tx);
+    }).then(function () { return found; });
+  }
+
+  // The earliest day that has a note ('YYYY-MM-DD'), or null if there are none.
+  function earliestDay() {
+    return tx('notes', 'readonly').then(function (s) {
+      return new Promise(function (resolve, reject) {
+        var req = s.notes.index('day').openKeyCursor();
+        req.onsuccess = function () { resolve(req.result ? req.result.key : null); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+
   /* ---------- Media ---------- */
 
   // Sets or clears trashedAt on each media record, inside an open transaction.
@@ -324,6 +351,8 @@
     putNote: putNote,
     allNotes: allNotes,
     countNotes: countNotes,
+    notesForDays: notesForDays,
+    earliestDay: earliestDay,
     addNoteWithMedia: addNoteWithMedia,
     getMedia: getMedia,
     countMedia: countMedia,

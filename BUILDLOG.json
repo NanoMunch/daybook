@@ -1,8 +1,18 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "schemaVersion": 2,
-  "stagesDone": [1, 2],
+  "stagesDone": [
+    1,
+    2,
+    3
+  ],
   "changelog": [
+    {
+      "date": "2026-10-20",
+      "version": "1.2.0",
+      "stage": 3,
+      "summary": "Find anything: a search page that looks for every word typed (any order, ignoring case and accents) across notes and photo captions, results grouped by day with matches highlighted and photo thumbnails, tap a result to open that day at the note. Looking back (a week ago, a month ago, this date in earlier years) shows when the search box is empty, and an On this day slip appears on today's page when earlier years have notes on this date. No schema change."
+    },
     {
       "date": "2026-10-18",
       "version": "1.1.0",
@@ -21,7 +31,8 @@
     "The quick-capture bar lifts above the iOS keyboard using visualViewport; behaviour on the real keyboard is unverified.",
     "Backups use the iOS share sheet (Save to Files); the download fallback is untested on iOS.",
     "Backups are built in memory in one piece; with many hundreds of photos this may hit iPhone memory limits. Chunked backups may be needed later.",
-    "Photo picking, camera capture, HEIC handling and pinch zoom are untested on a real iPhone."
+    "Photo picking, camera capture, HEIC handling and pinch zoom are untested on a real iPhone.",
+    "Search, On this day and the highlighter marks are tested in headless Chromium only; the iOS keyboard's Search key and focus behaviour are unverified on a real iPhone."
   ],
-  "nextUp": "Stage 3: find anything (full-text search across notes and photo captions, results grouped by day with highlighted matches, plus On this day)."
+  "nextUp": "Stage 4: checklists and pins (to-do notes with tick boxes, pinned notes at the top of a day, automatic #hashtag chips)."
 }
