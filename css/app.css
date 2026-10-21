@@ -330,10 +330,12 @@ button {
 .notes { display: block; }
 
 .note {
+  position: relative;
   display: grid;
   grid-template-columns: var(--margin-x) 1fr;
   margin-bottom: var(--line);
 }
+.note-margin { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
 .note-time {
   padding-right: 8px;
   font-size: 12.5px;
@@ -395,7 +397,8 @@ button {
 }
 .edit-actions {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px;
   align-items: center;
   padding: 6px 0 0 12px;
   min-height: calc(var(--line) * 2);
@@ -1051,3 +1054,143 @@ mark {
         var(--rule) var(--line));
   }
 }
+
+/* ---------- To-dos, pins and tags ---------- */
+
+.tips { margin: 0; padding-left: 1.2em; font-size: 15px; color: var(--ink-soft); }
+.tips li { margin-bottom: 8px; }
+.tips li:last-child { margin-bottom: 0; }
+.tips strong { color: var(--ink); }
+
+/* Editing: small tools on the left, Cancel and Save on the right */
+.edit-actions .btn { padding-left: 12px; padding-right: 12px; }
+.edit-icon { width: 40px; margin-left: -4px; }
+.edit-icon + .edit-icon { margin-left: 0; }
+.edit-pin[aria-pressed="true"] { background: var(--slip); }
+
+/* Each line of a to-do note sits on its own ruled line */
+.note-text.is-checklist { cursor: text; }
+.note-text .line { min-height: var(--line); }
+.todo { display: flex; align-items: flex-start; min-height: var(--line); }
+.todo-box {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: var(--line);
+  margin: 0 0 0 -12px;   /* the tap area reaches back to the margin rule */
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+}
+.todo-box::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 5px;
+  width: 18px;
+  height: 18px;
+  border: 1.6px solid var(--ink-soft);
+  border-radius: 5px;
+  background: transparent;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+}
+.todo-box[aria-checked="true"]::before { background: var(--accent); border-color: var(--accent); }
+.todo-box[aria-checked="true"]::after {
+  content: "";
+  position: absolute;
+  left: 19.5px;
+  top: 8px;
+  width: 5px;
+  height: 10px;
+  border-right: 2px solid var(--accent-ink);
+  border-bottom: 2px solid var(--accent-ink);
+  transform: rotate(45deg);
+  animation: tick 160ms ease-out;
+}
+@keyframes tick { from { transform: rotate(45deg) scale(0.4); opacity: 0; } }
+.todo-box:active::before { border-color: var(--accent); }
+.todo-box:focus-visible { outline-offset: -2px; }
+.todo-text { flex: 1; min-width: 0; }
+.todo.is-done .todo-text {
+  color: var(--ink-soft);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--ink-soft) 70%, transparent);
+  text-decoration-thickness: 1.5px;
+}
+.note-progress {
+  padding-right: 8px;
+  font-size: 11.5px;
+  line-height: var(--line);
+  text-align: right;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.note-progress.is-complete { color: var(--accent); font-weight: 600; }
+
+/* A pin pushed through the page on the margin rule */
+.note.is-pinned .note-time { padding-right: 13px; }
+.note-pin {
+  position: absolute;
+  top: 8px;
+  left: calc(var(--margin-x) - 6px);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--accent) 45%, #fff) 0 18%, var(--accent) 60%);
+  box-shadow: 1px 2px 2px rgba(0, 0, 0, 0.22);
+}
+/* A short dashed rule in the blank line under the pinned notes */
+.note.after-pins::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--line) / -2);
+  left: calc(var(--margin-x) + 12px);
+  width: 56px;
+  border-top: 1.5px dashed color-mix(in srgb, var(--ink-soft) 55%, transparent);
+}
+
+/* #tags: a soft tinted highlight around the word, inline so the ruled lines stay even */
+.tag {
+  padding: 0.04em 0.24em;
+  margin: 0 -0.04em;
+  border-radius: 0.4em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  cursor: pointer;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.tag:active { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* Tags listed in search when the box is empty */
+.search-tags {
+  display: grid;
+  grid-template-columns: var(--margin-x) minmax(0, 1fr);
+  margin-bottom: var(--line);
+}
+.search-tags-label {
+  margin: 0;
+  padding-right: 8px;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: var(--line);
+  text-align: right;
+  color: var(--ink-soft);
+}
+.search-tag-list { display: flex; flex-wrap: wrap; padding-left: 12px; }
+.tag-pill {
+  color: var(--accent);
+  height: 24px;
+  margin: 2px 6px 2px 0;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--paper-raised);
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.tag-count { margin-left: 6px; font-weight: 400; font-size: 12px; color: var(--ink-soft); }

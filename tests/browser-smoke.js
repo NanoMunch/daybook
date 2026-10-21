@@ -753,6 +753,152 @@ function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFu
     await ctx.close();
   }
 
+  // 6. To-dos, pins and hashtags
+  {
+    const ctx = await browser.newContext(PHONE);
+    await ctx.addInitScript(STANDALONE);
+    const page = await ctx.newPage();
+    watch(page);
+    await page.goto(BASE);
+    await page.waitForSelector('#app:not([hidden])');
+    const noteCount = () => page.$$eval('.note', (els) => els.length);
+    const dbNotes = () => page.evaluate(async () => (await window.DaybookDB.allNotes()).sort((a, b) => a.createdAt - b.createdAt));
+
+    // Build a checklist with the to-do button and Return
+    await page.click('#capture-text');
+    await page.click('#capture-todo');
+    check('to-do button starts a box in the note box', (await page.inputValue('#capture-text')) === '[ ] ');
+    check('note box keeps focus after the to-do button', await page.evaluate(() => document.activeElement.id === 'capture-text'));
+    await page.keyboard.type('Milk');
+    await page.keyboard.press('Enter');
+    check('Return starts the next to-do', (await page.inputValue('#capture-text')) === '[ ] Milk\n[ ] ');
+    await page.keyboard.type('Eggs #shopping');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Bread');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    check('Return on an empty to-do ends the list', (await page.inputValue('#capture-text')) === '[ ] Milk\n[ ] Eggs #shopping\n[ ] Bread\n');
+    await page.keyboard.type('From the corner shop');
+    await page.click('#capture-add');
+    await page.waitForFunction(() => document.querySelectorAll('.todo-box').length === 3);
+    check('checklist note shows tick boxes', (await page.$$eval('.todo-text', (e) => e.map((x) => x.textContent))).join('|') === 'Milk|Eggs #shopping|Bread');
+    check('plain line in a checklist stays text', (await page.textContent('.note-text .line')) === 'From the corner shop');
+    check('progress shown in the margin', (await page.textContent('.note-progress')) === '0 of 3');
+
+    await page.click('.todo-box >> nth=0');
+    await page.waitForFunction(() => document.querySelector('.todo-box').getAttribute('aria-checked') === 'true');
+    check('ticking a box doesn’t open the editor', await page.isHidden('.note-editor').catch(() => true) && !(await page.$('.note-editor')));
+    check('ticked item crossed through, progress updated', await page.$eval('.todo', (e) => e.classList.contains('is-done')) && (await page.textContent('.note-progress')) === '1 of 3');
+    await page.waitForFunction(() => window.DaybookDB.allNotes().then((n) => n[0].text.startsWith('[x] Milk')));
+    check('tick saved to the note text', (await dbNotes())[0].text === '[x] Milk\n[ ] Eggs #shopping\n[ ] Bread\nFrom the corner shop');
+    await page.click('.todo-box >> nth=1');
+    await page.click('.todo-box >> nth=2');
+    await page.waitForFunction(() => document.getElementById('toast-text').textContent.startsWith('All done'));
+    check('ticking the last box says all done', (await page.textContent('.note-progress')) === '3 of 3');
+    await page.click('.todo-box >> nth=2');
+    await page.waitForFunction(() => document.querySelectorAll('.todo-box[aria-checked="true"]').length === 2);
+    check('a box can be unticked', true);
+
+    // Tag chips, other notes, ruled lines
+    await page.fill('#capture-text', 'Fixed the #garden gate with #Sam. Not a tag: C# or #42');
+    await page.click('#capture-add');
+    await page.fill('#capture-text', '[ ] <img src=x onerror="window.__xss2=1"> sort the #garden shed');
+    await page.click('#capture-add');
+    await page.fill('#capture-text', 'Plain note at the end');
+    await page.click('#capture-add');
+    await page.waitForFunction(() => document.querySelectorAll('.note').length === 4);
+    check('hashtags become chips (and only real ones)', (await page.$$eval('.note:nth-child(2) .tag', (e) => e.map((x) => x.textContent))).join() === '#garden,#Sam');
+    check('chip text keeps the note readable', (await page.textContent('.note:nth-child(2) .note-text')) === 'Fixed the #garden gate with #Sam. Not a tag: C# or #42');
+    check('note text in to-dos shown as text, never run as code', await page.evaluate(() => window.__xss2 === undefined && !document.querySelector('.todo-text img')));
+    const aligned = await page.$$eval('.note', (els) => {
+      const top = document.getElementById('page').getBoundingClientRect().top;
+      return els.map((e) => Math.round((e.getBoundingClientRect().top - top) * 10) / 10);
+    });
+    check('to-dos and tags keep notes on the ruled lines', aligned.every((y) => Math.abs(y % 28) < 0.6 || Math.abs(y % 28) > 27.4), JSON.stringify(aligned));
+    const rows = await page.$$eval('.note:nth-child(1) .todo, .note:nth-child(1) .line', (els) => els.map((e) => e.getBoundingClientRect().height));
+    check('each checklist line is one ruled line tall', rows.every((h) => Math.abs(h - 28) < 0.6), JSON.stringify(rows));
+    await page.screenshot({ path: path.join(OUT, 'todos-light.png') });
+
+    // Tapping a tag opens search for it
+    await page.click('.note:nth-child(2) .tag >> nth=0');
+    await page.waitForSelector('#search:not([hidden])');
+    await page.waitForFunction(() => document.querySelectorAll('.result').length > 0);
+    check('tapping a tag searches for it', (await page.inputValue('#search-input')) === '#garden' && (await page.$$('.result')).length === 2 && !(await page.$('.note-editor')));
+    check('search results draw to-do boxes', (await page.$$eval('.result-text', (e) => e.map((x) => x.textContent))).some((t) => t.startsWith('☐ ')));
+    await page.click('#search-clear');
+    await page.waitForSelector('#search-tags:not([hidden])');
+    const tagList = await page.$$eval('.tag-pill', (e) => e.map((x) => x.textContent));
+    check('empty search lists every tag, most used first', JSON.stringify(tagList) === '["#garden2","#Sam1","#shopping1"]', JSON.stringify(tagList));
+    await page.screenshot({ path: path.join(OUT, 'search-tags.png') });
+    await page.click('.tag-pill >> nth=1');
+    await page.waitForFunction(() => document.getElementById('search-input').value === '#Sam' && document.querySelectorAll('.result').length === 1);
+    check('tapping a listed tag searches for it', await page.isHidden('#search-tags'));
+    await page.click('#close-search');
+
+    // Pin a note to the top of the day
+    await page.click('.note:nth-child(4) .note-text');
+    await page.waitForSelector('.note-editor');
+    check('editor offers a pin button', (await page.getAttribute('.edit-pin', 'aria-pressed')) === 'false');
+    await page.click('.edit-pin');
+    await page.waitForFunction(() => document.querySelector('.note:nth-child(1) .note-text') && document.querySelector('.note:nth-child(1) .note-text').textContent === 'Plain note at the end');
+    check('pinned note moves to the top with a pin', await page.isVisible('.note:nth-child(1) .note-pin') && (await page.textContent('#toast-text')) === 'Pinned to the top of the day');
+    check('a dashed rule separates pinned notes from the rest', await page.$eval('.note:nth-child(2)', (e) => e.classList.contains('after-pins')));
+    check('editor closed after pinning', !(await page.$('.note-editor')));
+    const pinned = (await dbNotes()).filter((n) => n.pinned).map((n) => n.text);
+    check('pin saved', JSON.stringify(pinned) === '["Plain note at the end"]', JSON.stringify(pinned));
+    const alignedPins = await page.$$eval('.note', (els) => {
+      const top = document.getElementById('page').getBoundingClientRect().top;
+      return els.every((e) => { const y = (e.getBoundingClientRect().top - top) % 28; return y < 0.6 || y > 27.4; });
+    });
+    check('pinned notes keep the ruled lines', alignedPins);
+    await page.screenshot({ path: path.join(OUT, 'pinned-light.png') });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.screenshot({ path: path.join(OUT, 'pinned-dark.png') });
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.click('#toast-undo');
+    await page.waitForFunction(() => document.querySelector('.note:nth-child(4) .note-text').textContent === 'Plain note at the end' && !document.querySelector('.note-pin'));
+    check('undo takes the pin back', !(await dbNotes()).some((n) => n.pinned));
+
+    // Pin while editing keeps the edit; the editor's to-do button
+    await page.click('.note:nth-child(2) .note-text');
+    await page.waitForSelector('.note-editor');
+    await page.fill('.note-editor', 'Garden gate fixed #garden');
+    await page.click('.edit-pin');
+    await page.waitForFunction(() => document.querySelector('.note:nth-child(1) .note-text').textContent === 'Garden gate fixed #garden');
+    check('pinning while editing saves the edit too', (await dbNotes()).find((n) => n.pinned).text === 'Garden gate fixed #garden');
+    await page.click('.note:nth-child(4) .note-text');
+    await page.waitForSelector('.note-editor');
+    await page.click('.edit-todo');
+    check('editor to-do button turns the line into a to-do', (await page.inputValue('.note-editor')) === '[ ] Plain note at the end');
+    await page.click('.edit-actions .btn-primary');
+    await page.waitForFunction(() => document.querySelectorAll('.note:nth-child(4) .todo-box').length === 1);
+    check('saved line becomes a tick box', true);
+    await page.screenshot({ path: path.join(OUT, 'editor-tools.png') });
+
+    // Survives reload; backups keep pins and ticks
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => document.querySelectorAll('.note').length === 4);
+    check('pins and ticks kept after reload', await page.isVisible('.note:nth-child(1) .note-pin') && (await page.$$('.todo-box[aria-checked="true"]')).length === 2);
+    const backupFile = await makeBackup(page, 'todo-pin-backup');
+    const pinnedId = (await dbNotes()).find((n) => n.pinned).id;
+    await page.evaluate(async (id) => { const n = await window.DaybookDB.getNote(id); await window.DaybookDB.deleteNote(n); }, pinnedId);
+    await page.evaluate(async () => {
+      const n = (await window.DaybookDB.allNotes()).find((x) => x.text.startsWith('[x] Milk'));
+      await window.DaybookDB.deleteNote(n);
+    });
+    const summary = await openRestoreSummary(page, backupFile, 'todo-pin-backup');
+    await finishRestore(page, true);
+    await page.waitForFunction(() => document.querySelectorAll('.note').length === 4);
+    const back = await dbNotes();
+    check('restore brings back pins and ticked boxes', summary.includes('Restoring will add 2 notes.') && back.find((n) => n.id === pinnedId).pinned === true &&
+      back.some((n) => n.text === '[x] Milk\n[x] Eggs #shopping\n[ ] Bread\nFrom the corner shop'), summary);
+
+    const csp = await page.evaluate(() => window.__csp);
+    check('no CSP violations with to-dos, pins and tags', csp.length === 0, JSON.stringify(csp));
+    await ctx.close();
+  }
+
   const appErrors = errors.filter((e) => !e.includes('example.com') && !e.includes('Content Security Policy') && !e.includes('net::ERR_INTERNET_DISCONNECTED'));
   check('no console errors', appErrors.length === 0, JSON.stringify(appErrors));
   await browser.close();

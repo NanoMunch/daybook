@@ -1,12 +1,19 @@
 {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "schemaVersion": 2,
   "stagesDone": [
     1,
     2,
-    3
+    3,
+    4
   ],
   "changelog": [
+    {
+      "date": "2026-10-21",
+      "version": "1.3.0",
+      "stage": 4,
+      "summary": "Checklists, pins and tags: a to-do button in the note box (and in the editor) turns a line into a tick box, Return starts the next to-do and Return on an empty one ends the list; boxes tick right on the page with a done count in the margin and a small 'All done' when the last one is ticked. Notes can be pinned to the top of their day from the editor (with Undo), shown with a pin on the margin rule and a dashed rule under the pinned group. Words starting with # become tag chips; tapping one searches for it, and the empty search page lists every tag with counts. To-dos live in the note text as [ ] / [x] lines and pins as an extra field, so search, backups and older versions keep working. No schema change. Writing tips added to Settings."
+    },
     {
       "date": "2026-10-20",
       "version": "1.2.0",
@@ -32,7 +39,8 @@
     "Backups use the iOS share sheet (Save to Files); the download fallback is untested on iOS.",
     "Backups are built in memory in one piece; with many hundreds of photos this may hit iPhone memory limits. Chunked backups may be needed later.",
     "Photo picking, camera capture, HEIC handling and pinch zoom are untested on a real iPhone.",
-    "Search, On this day and the highlighter marks are tested in headless Chromium only; the iOS keyboard's Search key and focus behaviour are unverified on a real iPhone."
+    "Search, On this day and the highlighter marks are tested in headless Chromium only; the iOS keyboard's Search key and focus behaviour are unverified on a real iPhone.",
+    "The to-do button is meant to keep the iOS keyboard up, and Return is meant to continue a list; both rely on iOS Safari key and pointer events that are unverified on a real iPhone. Tick boxes are 28 px tall (one ruled line), below Apple's 44 px guideline, though 42 px wide."
   ],
-  "nextUp": "Stage 4: checklists and pins (to-do notes with tick boxes, pinned notes at the top of a day, automatic #hashtag chips)."
+  "nextUp": "Stage 5: voice notes (record with MediaRecorder into IndexedDB, playback, included in backups; transcription via the iPhone keyboard's dictation, with browser speech recognition only as a clearly-labelled opt-in if it works)."
 }

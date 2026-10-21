@@ -4,11 +4,12 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.2.0';
+  var APP_VERSION = '1.3.0';
   var DB = window.DaybookDB;
   var Backup = window.DaybookBackup;
   var Photos = window.DaybookPhotos;
   var Search = window.DaybookSearch;
+  var Lines = window.DaybookLines;
   var MAX_RESULTS = 150;
   var DAY_MS = 86400000;
   var BACKUP_EVERY_DAYS = 7;
@@ -36,7 +37,7 @@
     restoreBytes: null,
     restorePlan: null,
     addingPhotos: false,
-    search: { index: null, seq: 0, timer: null, urls: [] }
+    search: { index: null, tags: null, seq: 0, timer: null, urls: [] }
   };
 
   var viewer = { noteId: null, index: 0, url: null, ratio: 1, zoom: 1, fitW: 0, fitH: 0 };
@@ -160,14 +161,88 @@
     return wrap;
   }
 
+  // Text with its #hashtags as tappable chips. Newlines are kept by the page's pre-wrap style.
+  function appendWithTags(el, text) {
+    Lines.segments(text).forEach(function (s) {
+      if (!s.tag) { el.appendChild(document.createTextNode(s.text)); return; }
+      // An inline span (not a button) so the highlight wraps the word without changing the line height.
+      var chip = document.createElement('span');
+      chip.className = 'tag';
+      chip.textContent = s.text;
+      chip.tabIndex = 0;
+      chip.setAttribute('role', 'button');
+      chip.setAttribute('aria-label', 'Notes tagged ' + s.text);
+      chip.addEventListener('click', function (e) {
+        e.stopPropagation();
+        openTagSearch(s.tag);
+      });
+      chip.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openTagSearch(s.tag); }
+      });
+      el.appendChild(chip);
+    });
+  }
+
+  // A to-do note: every line on its own ruled line, boxes you can tick in place.
+  function fillChecklist(el, note) {
+    Lines.parse(note.text).forEach(function (p) {
+      var row = document.createElement('div');
+      if (!p.todo) {
+        row.className = 'line';
+        appendWithTags(row, p.body);
+        el.appendChild(row);
+        return;
+      }
+      row.className = 'todo' + (p.done ? ' is-done' : '');
+      if (p.indent) row.style.paddingLeft = Math.min(4, p.indent.replace(/\t/g, '  ').length) * 0.5 + 'em';
+      var box = document.createElement('button');
+      box.type = 'button';
+      box.className = 'todo-box';
+      box.setAttribute('role', 'checkbox');
+      box.setAttribute('aria-checked', p.done ? 'true' : 'false');
+      box.setAttribute('aria-label', p.body.trim() || 'Empty to-do');
+      box.addEventListener('click', function (e) {
+        e.stopPropagation();
+        toggleTodo(note.id, p.line);
+      });
+      var text = document.createElement('span');
+      text.className = 'todo-text';
+      appendWithTags(text, p.body);
+      row.appendChild(box);
+      row.appendChild(text);
+      el.appendChild(row);
+    });
+  }
+
   function noteElement(note) {
     var art = document.createElement('article');
-    art.className = 'note';
+    art.className = 'note' + (note.pinned ? ' is-pinned' : '');
 
+    var margin = document.createElement('div');
+    margin.className = 'note-margin';
     var time = document.createElement('time');
     time.className = 'note-time';
     time.dateTime = new Date(note.createdAt).toISOString();
     time.textContent = fmtTime.format(note.createdAt);
+    margin.appendChild(time);
+    var checklist = Lines.isChecklist(note.text);
+    if (checklist) {
+      var c = Lines.counts(note.text);
+      if (c.total > 1) {
+        var progress = document.createElement('span');
+        progress.className = 'note-progress' + (c.done === c.total ? ' is-complete' : '');
+        progress.textContent = c.done + ' of ' + c.total;
+        progress.setAttribute('aria-label', c.done + ' of ' + c.total + ' done');
+        margin.appendChild(progress);
+      }
+    }
+    if (note.pinned) {
+      var pin = document.createElement('span');
+      pin.className = 'note-pin';
+      pin.setAttribute('role', 'img');
+      pin.setAttribute('aria-label', 'Pinned');
+      margin.appendChild(pin);
+    }
 
     var body = document.createElement('div');
     body.className = 'note-body';
@@ -176,11 +251,14 @@
     var target;
     if (note.text || !hasPhotos(note)) {
       target = document.createElement('div');
-      target.className = 'note-text note-edit-target';
+      target.className = 'note-text note-edit-target' + (checklist ? ' is-checklist' : '');
       target.tabIndex = 0;
-      target.setAttribute('role', 'button');
-      target.textContent = note.text;
+      target.setAttribute('aria-roledescription', 'note');
+      target.title = 'Tap to edit';
+      if (checklist) fillChecklist(target, note);
+      else appendWithTags(target, note.text);
       target.addEventListener('keydown', function (e) {
+        if (e.target !== target) return; // a tick box or tag has its own keys
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startEdit(note.id); }
       });
     } else {
@@ -189,20 +267,33 @@
       target.className = 'note-caption-add note-edit-target';
       target.textContent = 'Add a caption';
     }
-    target.addEventListener('click', function () { startEdit(note.id); });
+    target.addEventListener('click', function (e) {
+      if (e.target.closest('.tag, .todo-box')) return;
+      startEdit(note.id);
+    });
     body.appendChild(target);
 
-    art.appendChild(time);
+    art.appendChild(margin);
     art.appendChild(body);
     return art;
+  }
+
+  // Pinned notes first, then the rest, each in the order they were written.
+  function pageOrder(notes) {
+    return notes.filter(function (n) { return n.pinned; })
+      .concat(notes.filter(function (n) { return !n.pinned; }));
   }
 
   function renderNotes() {
     var list = $('notes');
     list.textContent = '';
     state.els = new Map();
-    state.notes.forEach(function (note) {
+    var order = pageOrder(state.notes);
+    var pinnedCount = order.filter(function (n) { return n.pinned; }).length;
+    order.forEach(function (note, i) {
       var el = noteElement(note);
+      // A short dashed rule in the blank line between the pinned notes and the rest.
+      if (pinnedCount && i === pinnedCount) el.classList.add('after-pins');
       state.els.set(note.id, el);
       list.appendChild(el);
     });
@@ -325,7 +416,7 @@
   }
 
   function cleanText(text) {
-    return String(text).replace(/^\s*\n/, '').replace(/\s+$/, '');
+    return Lines.tidy(String(text).replace(/^\s*\n/, '').replace(/\s+$/, '')).replace(/\s+$/, '');
   }
 
   function addNote() {
@@ -459,7 +550,13 @@
 
       var actions = document.createElement('div');
       actions.className = 'edit-actions';
-      actions.appendChild(button('Delete', 'btn btn-quiet btn-danger', function () { deleteNote(id); }));
+      actions.appendChild(iconButton(ICONS.trash, 'Delete note', 'edit-icon btn-danger', function () { deleteNote(id); }));
+      var todoBtn = iconButton(ICONS.todo, 'Make this line a to-do', 'edit-icon edit-todo', function () { toggleTodoLine(ta); });
+      keepFocus(todoBtn);
+      actions.appendChild(todoBtn);
+      var pinBtn = iconButton(ICONS.pin, note.pinned ? 'Unpin' : 'Pin to the top of the day', 'edit-icon edit-pin', function () { togglePin(id); });
+      pinBtn.setAttribute('aria-pressed', note.pinned ? 'true' : 'false');
+      actions.appendChild(pinBtn);
       var spacer = document.createElement('span');
       spacer.className = 'spacer';
       actions.appendChild(spacer);
@@ -476,13 +573,31 @@
 
       ta.addEventListener('input', function () { sizeEditor(ta); });
       ta.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
-        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitEdit(); }
+        if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); return; }
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitEdit(); return; }
+        listKeydown(e);
       });
       sizeEditor(ta);
       ta.focus();
       ta.setSelectionRange(ta.value.length, ta.value.length);
     });
+  }
+
+  var ICONS = {
+    trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10.5 10.5v6M13.5 10.5v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+    todo: '<rect x="4.5" y="4.5" width="15" height="15" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8.3 12.2l2.6 2.6 5-5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    pin: '<circle cx="12" cy="8.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 13v7.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>'
+  };
+
+  function iconButton(svg, label, className, onClick) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'icon-btn ' + className;
+    b.setAttribute('aria-label', label);
+    b.title = label;
+    b.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">' + svg + '</svg>';
+    b.addEventListener('click', onClick);
+    return b;
   }
 
   function button(label, className, onClick) {
@@ -559,6 +674,116 @@
     }).catch(function () {
       toast('Couldn’t delete that note. Try again.');
     });
+  }
+
+  /* ---------------- To-dos and pins ---------------- */
+
+  // Redraws one note in place, keeping the rest of the page (and its scroll position) as it is.
+  function redrawNote(note) {
+    var old = state.els.get(note.id);
+    if (!old) { renderNotes(); return; }
+    var el = noteElement(note);
+    if (old.classList.contains('after-pins')) el.classList.add('after-pins');
+    old.parentNode.replaceChild(el, old);
+    state.els.set(note.id, el);
+    return el;
+  }
+
+  function toggleTodo(id, line) {
+    var run = state.editing ? commitEdit() : Promise.resolve();
+    return run.then(function () {
+      var note = findNote(id);
+      if (!note) return;
+      var text = Lines.toggle(note.text, line);
+      if (text === note.text) return;
+      var updated = Object.assign({}, note, { text: text, updatedAt: Date.now() });
+      replaceNoteInState(updated);
+      var el = redrawNote(updated);
+      var box = el && el.querySelectorAll('.todo-box')[todoPosition(updated.text, line)];
+      if (box) box.focus({ preventScroll: true });
+      var before = Lines.counts(note.text);
+      var after = Lines.counts(text);
+      if (after.total > 1 && after.done === after.total && before.done < before.total) toast('All done. Nicely ticked off.');
+      return DB.putNote(updated).catch(function () {
+        replaceNoteInState(note);
+        redrawNote(note);
+        toast('Couldn’t save that tick. Try again.');
+      });
+    });
+  }
+
+  // Which tick box (0, 1, ...) belongs to a given line of the text.
+  function todoPosition(text, line) {
+    var n = 0;
+    var parsed = Lines.parse(text);
+    for (var i = 0; i < line && i < parsed.length; i++) if (parsed[i].todo) n += 1;
+    return n;
+  }
+
+  // Pins a note to the top of its day, or unpins it. Saves any edit to its text first.
+  function togglePin(id) {
+    var ed = state.editing && state.editing.id === id ? state.editing : null;
+    var note = findNote(id);
+    if (!note) return Promise.resolve();
+    var text = ed ? cleanText(ed.textarea.value) : note.text;
+    if (ed && !text.trim() && !hasPhotos(note)) text = note.text; // don't lose a note by pinning it empty
+    var updated = Object.assign({}, note, { text: text, updatedAt: Date.now() });
+    if (note.pinned) delete updated.pinned;
+    else updated.pinned = true;
+    // Undo only takes the pin back; a text change saved along with it stays.
+    var before = Object.assign({}, updated);
+    if (note.pinned) before.pinned = true;
+    else delete before.pinned;
+    return DB.putNote(updated).then(function () {
+      replaceNoteInState(updated);
+      state.editing = null;
+      document.body.classList.remove('is-editing');
+      renderNotes();
+      var el = state.els.get(id);
+      if (el && updated.pinned) el.scrollIntoView({ block: 'nearest' });
+      flashNote(id);
+      toast(updated.pinned ? 'Pinned to the top of the day' : 'Unpinned', function () {
+        before.updatedAt = Date.now();
+        return DB.putNote(before).then(function () { replaceNoteInState(before); renderNotes(); });
+      });
+    }).catch(function () {
+      toast('Couldn’t save that change. Try again.');
+    });
+  }
+
+  function openTagSearch(tag) {
+    commitEdit().then(function () {
+      $('search-input').value = '#' + tag;
+      if (isSearchOpen()) { renderSearch(); $('search-input').blur(); }
+      else openSearch(false);
+    });
+  }
+
+  // The to-do button and Return in the note box and the editor.
+  function applyEdit(ta, r) {
+    ta.value = r.value;
+    ta.setSelectionRange(r.cursor, r.cursor);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function toggleTodoLine(ta) {
+    applyEdit(ta, Lines.toggleMarker(ta.value, ta.selectionStart));
+    ta.focus();
+  }
+
+  function listKeydown(e) {
+    if (e.key !== 'Enter' || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+    var ta = e.target;
+    var r = Lines.enterAt(ta.value, ta.selectionStart, ta.selectionEnd);
+    if (!r) return;
+    e.preventDefault();
+    applyEdit(ta, r);
+  }
+
+  // A button that works on a text box without taking the keyboard away from it.
+  function keepFocus(btn) {
+    btn.addEventListener('pointerdown', function (e) { e.preventDefault(); });
+    btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
   }
 
   /* ---------------- Toast with undo ---------------- */
@@ -883,7 +1108,7 @@
   }
 
   function excerptOf(note) {
-    var text = String(note.text || '').trim().split('\n')[0];
+    var text = Lines.display(String(note.text || '').trim()).split('\n')[0];
     if (text) return text;
     var n = photosOf(note).length;
     return n === 1 ? 'A photo' : n + ' photos';
@@ -917,6 +1142,7 @@
     state.search.index = null;
     $('search-status').textContent = '';
     $('search-results').textContent = '';
+    $('search-tags').hidden = true;
     $('search').hidden = false;
     $('search').scrollTop = 0;
     $('search-clear').hidden = !$('search-input').value;
@@ -928,6 +1154,7 @@
     }).then(function (notes) {
       if (!isSearchOpen()) return;
       state.search.index = Search.buildIndex(notes);
+      state.search.tags = Lines.tagIndex(notes);
       return renderSearch();
     }).catch(function () {
       setSearchStatus(['Couldn’t read your notes to search them. Close Daybook fully and open it again.']);
@@ -975,6 +1202,7 @@
     var query = $('search-input').value;
     $('search-clear').hidden = !query;
     var r = Search.run(index, query);
+    drawTags(r.terms.length ? [] : state.search.tags || []);
     if (!r.terms.length) return renderLookBackView(seq);
 
     if (!r.notes.length) {
@@ -1005,6 +1233,27 @@
     });
   }
 
+  // Every #tag used in any note, as chips above the looking-back list.
+  function drawTags(list) {
+    var box = $('search-tags');
+    var chips = $('search-tag-list');
+    chips.textContent = '';
+    box.hidden = !list.length;
+    list.slice(0, 40).forEach(function (t) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'tag-pill';
+      chip.textContent = '#' + t.tag;
+      var n = document.createElement('span');
+      n.className = 'tag-count';
+      n.textContent = String(t.count);
+      chip.appendChild(n);
+      chip.setAttribute('aria-label', '#' + t.tag + ', ' + plural(t.count, 'note', 'notes'));
+      chip.addEventListener('click', function () { openTagSearch(t.tag); });
+      chips.appendChild(chip);
+    });
+  }
+
   function appendMarked(el, text, ranges) {
     var at = 0;
     ranges.forEach(function (r) {
@@ -1031,7 +1280,7 @@
     var text = document.createElement('span');
     text.className = 'result-text';
     if (String(note.text || '').trim()) {
-      var sn = Search.snippet(note.text, terms);
+      var sn = Search.snippet(Lines.display(note.text), terms);
       if (sn.cutStart) text.appendChild(document.createTextNode('…'));
       appendMarked(text, sn.text, sn.ranges);
     } else {
@@ -1574,8 +1823,11 @@
     var input = $('capture-text');
     input.addEventListener('input', function () { autosizeCapture(); updateAddButton(); saveDraftSoon(); });
     input.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addNote(); }
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addNote(); return; }
+      listKeydown(e);
     });
+    keepFocus($('capture-todo'));
+    $('capture-todo').addEventListener('click', function () { toggleTodoLine(input); });
     $('capture').addEventListener('submit', function (e) { e.preventDefault(); addNote(); });
     // Keep the keyboard up when tapping Add.
     $('capture-add').addEventListener('mousedown', function (e) { e.preventDefault(); });
