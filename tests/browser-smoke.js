@@ -69,7 +69,7 @@ const STANDALONE = () => {
 function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
 
 (async () => {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
   const errors = [];
   const watch = (page) => {
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
@@ -896,6 +896,174 @@ function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFu
 
     const csp = await page.evaluate(() => window.__csp);
     check('no CSP violations with to-dos, pins and tags', csp.length === 0, JSON.stringify(csp));
+    await ctx.close();
+  }
+
+  // 7. Voice notes (Chromium's fake microphone plays a test tone)
+  {
+    const ctx = await browser.newContext(PHONE);
+    await ctx.grantPermissions(['microphone'], { origin: new URL(BASE).origin });
+    await ctx.addInitScript(STANDALONE);
+    const page = await ctx.newPage();
+    watch(page);
+    await page.goto(BASE);
+    await page.waitForSelector('#app:not([hidden])');
+    await page.evaluate(() => navigator.serviceWorker.ready);
+    const dbNotes = () => page.evaluate(() => window.DaybookDB.allNotes());
+    const audioMedia = () => page.evaluate(async () => {
+      const notes = await window.DaybookDB.allNotes();
+      const ids = notes.flatMap((n) => (n.audio || []).map((a) => a.id));
+      const m = await window.DaybookDB.getMedia(ids);
+      return [...m.values()].map((r) => ({ id: r.id, kind: r.kind, type: r.type, size: r.blob.size, blobType: r.blob.type, duration: r.duration, trashed: !!r.trashedAt }));
+    });
+
+    check('microphone shown in place of Add when the note box is empty', await page.isVisible('#capture-voice') && !(await page.isVisible('#capture-add')));
+    await page.fill('#capture-text', 'typing');
+    check('Add comes back once something is typed', await page.isVisible('#capture-add') && !(await page.isVisible('#capture-voice')));
+    await page.fill('#capture-text', '');
+    check('microphone returns when the box is cleared', await page.isVisible('#capture-voice'));
+
+    // Record about 2.5 seconds
+    await page.click('#capture-voice');
+    await page.waitForSelector('#recorder.is-live', { timeout: 10000 });
+    check('recording panel opens and records', (await page.textContent('#recorder-status')) === 'Recording');
+    await page.waitForTimeout(2600);
+    check('recording timer counts up', /^0:0[2-3]$/.test(await page.textContent('#recorder-time')), await page.textContent('#recorder-time'));
+    const moving = await page.$$eval('#recorder-meter span', (els) => els.some((e) => e.style.transform && e.style.transform !== 'scaleY(0.06)'));
+    check('level meter moves with the sound', moving);
+    await page.screenshot({ path: path.join(OUT, 'recorder-light.png') });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.screenshot({ path: path.join(OUT, 'recorder-dark.png') });
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.click('#recorder-stop');
+    await page.waitForSelector('.note .voice', { timeout: 10000 });
+    check('voice note appears on the page', (await page.$$('.note .voice')).length === 1);
+    check('saved toast shows the length', /Voice note saved \(0:0[2-3]\)/.test(await page.textContent('#toast-text')), await page.textContent('#toast-text'));
+    check('recording panel closed after saving', !(await page.$eval('#recorder', (d) => d.open)));
+    let media = await audioMedia();
+    let notes = await dbNotes();
+    check('recording stored as an audio Blob in IndexedDB', media.length === 1 && media[0].kind === 'audio' && media[0].size > 1000 && /^audio\//.test(media[0].blobType), JSON.stringify(media));
+    check('note keeps the recording length', notes[0].type === 'voice' && notes[0].audio[0].dur >= 2 && notes[0].audio[0].dur < 4, JSON.stringify(notes[0].audio));
+    check('microphone released after recording', await page.evaluate(() => !document.querySelector('#recorder').open));
+
+    // Playback
+    await page.click('.voice-play');
+    await page.waitForSelector('.voice.is-playing', { timeout: 5000 });
+    await page.waitForTimeout(1200);
+    const playing = await page.textContent('.voice-time');
+    check('plays back with elapsed time shown', /^0:0[0-9] \/ 0:0[0-9]$/.test(playing) && (await page.getAttribute('.voice-play', 'aria-label')).startsWith('Pause'), playing);
+    await page.click('.voice-rate');
+    check('playback speed changes', (await page.textContent('.voice-rate')) === '1½×');
+    await page.click('.voice-play');
+    await page.waitForFunction(() => !document.querySelector('.voice.is-playing'));
+    check('pause stops playback', true);
+    await page.click('.voice-rate');
+    await page.click('.voice-rate');
+    check('speed cycles back to normal', (await page.textContent('.voice-rate')) === '1×');
+    await page.click('.voice-play');
+    await page.waitForFunction(() => !document.querySelector('.voice.is-playing') && document.querySelector('.voice-time').textContent.indexOf('/') < 0, null, { timeout: 8000 }).catch(() => {});
+    check('plays to the end and resets', !(await page.$('.voice.is-playing')));
+
+    // Caption, and the next note on the ruled lines
+    await page.click('.note .note-caption-add');
+    await page.waitForSelector('.note-editor');
+    check('voice note editor asks for a caption and offers Save/share', (await page.getAttribute('.note-editor', 'placeholder')) === 'Caption' && await page.isVisible('.edit-share'));
+    await page.fill('.note-editor', 'Idea for the garden shed');
+    await page.click('.edit-actions .btn-primary');
+    await page.waitForFunction(() => document.querySelector('.note .note-text') && document.querySelector('.note .note-text').textContent === 'Idea for the garden shed');
+    check('caption added to a voice note', (await dbNotes())[0].text === 'Idea for the garden shed' && (await page.$$('.note .voice')).length === 1);
+    await page.fill('#capture-text', 'Text note after the voice note');
+    await page.click('#capture-add');
+    await page.waitForFunction(() => document.querySelectorAll('.note').length === 2);
+    const aligned = await page.$$eval('.note', (els) => {
+      const top = document.getElementById('page').getBoundingClientRect().top;
+      return els.map((e) => e.getBoundingClientRect().top - top);
+    });
+    check('voice notes keep the next note on the ruled lines', aligned.every((y) => Math.abs(y % 28) < 0.6 || Math.abs(y % 28) > 27.4), JSON.stringify(aligned));
+    await page.screenshot({ path: path.join(OUT, 'voice-light.png') });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.screenshot({ path: path.join(OUT, 'voice-dark.png') });
+    await page.emulateMedia({ colorScheme: 'light' });
+
+    // Search finds the caption and lists it as a voice note
+    await page.click('#open-search');
+    await page.fill('#search-input', 'shed');
+    await page.waitForFunction(() => document.querySelectorAll('.result').length === 1);
+    check('search finds a voice note by its caption', (await page.textContent('.result-text')).includes('shed'));
+    await page.click('#close-search');
+
+    // Cancel throws a recording away
+    await page.click('#capture-voice');
+    await page.waitForSelector('#recorder.is-live');
+    await page.waitForTimeout(800);
+    await page.click('#recorder-cancel');
+    await page.waitForTimeout(400);
+    check('cancel keeps nothing', (await page.$$('.note')).length === 2 && (await audioMedia()).length === 1);
+
+    // Going to the background mid-recording keeps what was recorded
+    await page.click('#capture-voice');
+    await page.waitForSelector('#recorder.is-live');
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.waitForFunction(() => document.querySelectorAll('.note .voice').length === 2, null, { timeout: 8000 });
+    check('leaving the app mid-recording saves it', (await page.textContent('#toast-text')).includes('background'));
+    await page.evaluate(() => { delete document.visibilityState; });
+
+    // Settings count, delete with undo
+    await page.click('#open-settings');
+    await page.waitForFunction(() => document.getElementById('fact-voice').textContent === '2');
+    check('settings count voice notes', true);
+    await page.click('#close-settings');
+    const lastVoice = await page.$$('.note');
+    await page.click('.note:nth-child(3) .note-caption-add');
+    await page.waitForSelector('.note-editor');
+    await page.click('.edit-actions .btn-danger');
+    await page.waitForFunction(() => document.querySelectorAll('.note .voice').length === 1);
+    check('deleting a voice note marks its recording for clearing', (await audioMedia()).length === 1 && lastVoice.length === 3);
+    await page.click('#toast-undo');
+    await page.waitForFunction(() => document.querySelectorAll('.note .voice').length === 2);
+    const afterUndo = await page.evaluate(async () => {
+      const all = await window.DaybookDB.exportAll();
+      return all.media.filter((m) => m.kind === 'audio').length;
+    });
+    check('undo brings the voice note and recording back', afterUndo === 2);
+
+    // Backup and restore keep recordings
+    const backupFile = await makeBackup(page, 'voice-backup-pass');
+    const voiceIds = (await dbNotes()).filter((n) => n.audio).map((n) => n.id);
+    await page.evaluate(async (ids) => {
+      for (const id of ids) { const n = await window.DaybookDB.getNote(id); await window.DaybookDB.deleteNote(n); }
+      await window.DaybookDB.sweepTrashedMedia(0);
+    }, voiceIds);
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => document.querySelectorAll('.note').length === 1);
+    const summary = await openRestoreSummary(page, backupFile, 'voice-backup-pass');
+    check('restore summary counts voice recordings', summary.includes('holds 3 notes and 2 voice recordings') && summary.includes('add 2 notes and 2 voice recordings'), summary);
+    await finishRestore(page, true);
+    await page.waitForFunction(() => document.querySelectorAll('.note .voice').length === 2);
+    media = await audioMedia();
+    check('restored recordings are whole', media.length === 2 && media.every((m) => m.size > 1000 && !m.trashed), JSON.stringify(media));
+    await page.click('.note:nth-child(1) .voice-play');
+    await page.waitForSelector('.voice.is-playing', { timeout: 5000 });
+    check('a restored recording plays', true);
+    await page.click('.note:nth-child(1) .voice-play');
+
+    // Microphone refused: a clear explanation, nothing saved
+    await page.evaluate(() => {
+      navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException('no', 'NotAllowedError'));
+    });
+    await page.click('#capture-voice');
+    await page.waitForSelector('#recorder-error:not([hidden])');
+    check('microphone refusal explained', (await page.textContent('#recorder-error')).includes('allowed to use the microphone'));
+    await page.click('#recorder-cancel');
+    check('panel closes after a refusal', !(await page.$eval('#recorder', (d) => d.open)));
+
+    const csp = await page.evaluate(() => window.__csp);
+    check('no CSP violations with voice notes', csp.length === 0, JSON.stringify(csp));
     await ctx.close();
   }
 

@@ -4,10 +4,11 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.0';
+  var APP_VERSION = '1.4.0';
   var DB = window.DaybookDB;
   var Backup = window.DaybookBackup;
   var Photos = window.DaybookPhotos;
+  var Voice = window.DaybookVoice;
   var Search = window.DaybookSearch;
   var Lines = window.DaybookLines;
   var MAX_RESULTS = 150;
@@ -37,6 +38,7 @@
     restoreBytes: null,
     restorePlan: null,
     addingPhotos: false,
+    recorder: null,       // the open voice recording, if any
     search: { index: null, tags: null, seq: 0, timer: null, urls: [] }
   };
 
@@ -89,6 +91,10 @@
 
   function photosOf(note) { return (note && Array.isArray(note.photos)) ? note.photos : []; }
   function hasPhotos(note) { return photosOf(note).length > 0; }
+  function audioOf(note) { return (note && Array.isArray(note.audio)) ? note.audio : []; }
+  function hasAudio(note) { return audioOf(note).length > 0; }
+  // Photo and voice notes can do without text: the text is their caption.
+  function hasMedia(note) { return hasPhotos(note) || hasAudio(note); }
 
   /* ---------------- Install screen vs app ---------------- */
 
@@ -247,9 +253,10 @@
     var body = document.createElement('div');
     body.className = 'note-body';
     if (hasPhotos(note)) body.appendChild(photosElement(note));
+    if (hasAudio(note)) body.appendChild(voiceElement(note));
 
     var target;
-    if (note.text || !hasPhotos(note)) {
+    if (note.text || !hasMedia(note)) {
       target = document.createElement('div');
       target.className = 'note-text note-edit-target' + (checklist ? ' is-checklist' : '');
       target.tabIndex = 0;
@@ -307,6 +314,7 @@
       else if (state.day > today) empty.textContent = 'Nothing planned for this day yet.';
       else empty.textContent = 'No notes on this day.';
     }
+    if (player.clipId) syncPlayerUI();
   }
 
   function loadDay(direction) {
@@ -317,11 +325,12 @@
     return DB.notesForDay(state.day).then(function (list) {
       notes = list;
       var ids = [];
-      notes.forEach(function (n) { photosOf(n).forEach(function (p) { ids.push(p.id); }); });
+      notes.forEach(function (n) { DB.mediaIdsOf(n).forEach(function (id) { ids.push(id); }); });
       return DB.getMedia(ids);
     }).then(function (media) {
       if (seq !== state.loadSeq) return;
       resetThumbUrls();
+      stopPlayback();
       state.notes = notes;
       state.media = media;
       renderNotes();
@@ -384,8 +393,13 @@
     el.style.height = (el.scrollHeight + 2) + 'px';
   }
 
+  // With nothing typed, the microphone takes the Add button's place (like a messaging app).
   function updateAddButton() {
-    $('capture-add').disabled = !$('capture-text').value.trim();
+    var empty = !$('capture-text').value.trim();
+    $('capture-add').disabled = empty;
+    var mic = empty && voiceAvailable() && !state.storageBroken;
+    $('capture-voice').hidden = !mic;
+    $('capture-add').hidden = mic;
   }
 
   function saveDraftSoon() {
@@ -512,6 +526,412 @@
     });
   }
 
+  /* ---------------- Voice notes ---------------- */
+
+  var MAX_RECORDING_S = 60 * 60; // an hour, then it saves by itself
+  var RATES = [1, 1.5, 2];
+  var player = { audio: null, clipId: null, noteId: null, url: null, rate: 1, seekTo: null, dragging: null };
+
+  var VOICE_ICONS = {
+    play: '<path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/>',
+    pause: '<path d="M7.5 5.5h3v13h-3zM13.5 5.5h3v13h-3z" fill="currentColor"/>'
+  };
+
+  function clipDuration(clip) {
+    var a = player.audio;
+    if (player.clipId === clip.id && a && isFinite(a.duration) && a.duration > 0) return a.duration;
+    return clip.dur || 0;
+  }
+
+  function rateLabel(r) { return String(r).replace('.5', '½') + '×'; }
+
+  function voiceElement(note) {
+    var wrap = document.createElement('div');
+    wrap.className = 'note-voice';
+    audioOf(note).forEach(function (clip) {
+      var row = document.createElement('div');
+      row.className = 'voice';
+      row.setAttribute('data-clip', clip.id);
+      var have = state.media.has(clip.id);
+
+      var play = document.createElement('button');
+      play.type = 'button';
+      play.className = 'voice-play';
+      play.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">' + VOICE_ICONS.play + '</svg>';
+      play.setAttribute('aria-label', 'Play voice note, ' + Voice.formatDuration(clip.dur));
+
+      var seek = document.createElement('input');
+      seek.type = 'range';
+      seek.className = 'voice-seek';
+      seek.min = '0';
+      seek.max = String(Math.max(0.1, clip.dur || 0));
+      seek.step = '0.1';
+      seek.value = '0';
+      seek.setAttribute('aria-label', 'Position in voice note');
+      seek.setAttribute('aria-valuetext', '0:00 of ' + Voice.formatDuration(clip.dur));
+
+      var time = document.createElement('span');
+      time.className = 'voice-time';
+      time.textContent = Voice.formatDuration(clip.dur);
+
+      var rate = document.createElement('button');
+      rate.type = 'button';
+      rate.className = 'voice-rate';
+      rate.textContent = rateLabel(player.rate);
+      rate.setAttribute('aria-label', 'Playback speed ' + player.rate + ' times');
+
+      if (!have) {
+        row.classList.add('is-missing');
+        play.disabled = true;
+        seek.disabled = true;
+        rate.disabled = true;
+        time.textContent = 'Recording missing';
+      } else {
+        play.addEventListener('click', function () { playClip(note.id, clip.id); });
+        seek.addEventListener('input', function () {
+          player.dragging = clip.id;
+          time.textContent = Voice.formatDuration(+seek.value) + ' / ' + Voice.formatDuration(clipDuration(clip));
+        });
+        seek.addEventListener('change', function () {
+          player.dragging = null;
+          seekClip(note.id, clip.id, +seek.value);
+        });
+        rate.addEventListener('click', cycleRate);
+      }
+
+      row.appendChild(play);
+      row.appendChild(seek);
+      row.appendChild(time);
+      row.appendChild(rate);
+      wrap.appendChild(row);
+    });
+    return wrap;
+  }
+
+  function findClip(clipId) {
+    for (var i = 0; i < state.notes.length; i++) {
+      var list = audioOf(state.notes[i]);
+      for (var j = 0; j < list.length; j++) if (list[j].id === clipId) return list[j];
+    }
+    return null;
+  }
+
+  // Puts a recording into the shared player (without playing it).
+  function loadClip(noteId, clipId) {
+    if (player.clipId === clipId && player.audio) return player.audio;
+    stopPlayback();
+    var m = state.media.get(clipId);
+    if (!m || !m.blob) return null;
+    var a = new Audio();
+    a.preload = 'auto';
+    player.audio = a;
+    player.clipId = clipId;
+    player.noteId = noteId;
+    player.url = URL.createObjectURL(m.blob);
+    ['play', 'pause', 'timeupdate', 'durationchange'].forEach(function (ev) { a.addEventListener(ev, syncPlayerUI); });
+    a.addEventListener('loadedmetadata', function () {
+      if (player.audio !== a) return;
+      if (player.seekTo != null) {
+        try { a.currentTime = player.seekTo; } catch (e) { /* not seekable yet */ }
+        player.seekTo = null;
+      }
+      syncPlayerUI();
+    });
+    a.addEventListener('ended', function () {
+      if (player.audio !== a) return;
+      try { a.currentTime = 0; } catch (e) { /* fine */ }
+      syncPlayerUI();
+    });
+    a.addEventListener('error', function () {
+      if (player.audio !== a) return;
+      stopPlayback();
+      toast('Couldn’t play this recording on this iPhone.');
+    });
+    a.src = player.url;
+    a.playbackRate = player.rate;
+    return a;
+  }
+
+  function playClip(noteId, clipId) {
+    var a = player.clipId === clipId ? player.audio : null;
+    if (a && !a.paused) { a.pause(); return; }
+    a = a || loadClip(noteId, clipId);
+    if (!a) return;
+    a.playbackRate = player.rate;
+    var p = a.play();
+    if (p && p.catch) {
+      p.catch(function (err) {
+        if (err && err.name === 'AbortError') return;
+        if (player.audio === a) stopPlayback();
+        toast('Couldn’t play this recording.');
+      });
+    }
+    syncPlayerUI();
+  }
+
+  function seekClip(noteId, clipId, seconds) {
+    var a = loadClip(noteId, clipId);
+    if (!a) return;
+    if (a.readyState >= 1) {
+      try { a.currentTime = seconds; } catch (e) { /* ignore */ }
+    } else {
+      player.seekTo = seconds;
+    }
+    syncPlayerUI();
+  }
+
+  function cycleRate() {
+    var i = RATES.indexOf(player.rate);
+    player.rate = RATES[(i + 1) % RATES.length];
+    if (player.audio) player.audio.playbackRate = player.rate;
+    syncPlayerUI();
+  }
+
+  function stopPlayback() {
+    var a = player.audio;
+    player.audio = null;
+    player.clipId = null;
+    player.noteId = null;
+    player.seekTo = null;
+    if (a) {
+      try { a.pause(); } catch (e) { /* fine */ }
+      a.removeAttribute('src');
+      try { a.load(); } catch (e) { /* fine */ }
+    }
+    if (player.url) URL.revokeObjectURL(player.url);
+    player.url = null;
+    syncPlayerUI();
+  }
+
+  // Brings every voice row on the page in line with the player.
+  function syncPlayerUI() {
+    var rows = document.querySelectorAll('#notes .voice');
+    Array.prototype.forEach.call(rows, function (row) {
+      var id = row.getAttribute('data-clip');
+      var clip = findClip(id);
+      if (!clip || row.classList.contains('is-missing')) return;
+      var play = row.querySelector('.voice-play');
+      var seek = row.querySelector('.voice-seek');
+      var time = row.querySelector('.voice-time');
+      var rate = row.querySelector('.voice-rate');
+      var active = player.clipId === id && player.audio;
+      var playing = !!(active && !player.audio.paused && !player.audio.ended);
+      var dur = clipDuration(clip);
+      var cur = active ? (player.seekTo != null ? player.seekTo : player.audio.currentTime || 0) : 0;
+      row.classList.toggle('is-playing', playing);
+      row.classList.toggle('is-active', !!active);
+      play.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">' + (playing ? VOICE_ICONS.pause : VOICE_ICONS.play) + '</svg>';
+      play.setAttribute('aria-label', (playing ? 'Pause' : 'Play') + ' voice note, ' + Voice.formatDuration(dur));
+      seek.max = String(Math.max(0.1, dur));
+      if (player.dragging !== id) {
+        seek.value = String(Math.min(cur, dur));
+        time.textContent = active && (cur > 0 || playing)
+          ? Voice.formatDuration(cur) + ' / ' + Voice.formatDuration(dur)
+          : Voice.formatDuration(dur);
+      }
+      seek.style.setProperty('--p', dur ? Math.min(100, (cur / dur) * 100).toFixed(2) + '%' : '0%');
+      seek.setAttribute('aria-valuetext', Voice.formatDuration(cur) + ' of ' + Voice.formatDuration(dur));
+      rate.textContent = rateLabel(player.rate);
+      rate.setAttribute('aria-label', 'Playback speed ' + player.rate + ' times');
+    });
+  }
+
+  function audioExtension(type) {
+    if (/mp4|aac|m4a/.test(type)) return 'm4a';
+    if (/webm/.test(type)) return 'webm';
+    if (/ogg/.test(type)) return 'ogg';
+    return 'audio';
+  }
+
+  // Opens the share sheet with the recording (e.g. Save to Files). Only ever on a tap.
+  function shareRecording(id) {
+    var note = findNote(id);
+    var clip = audioOf(note)[0];
+    var m = clip && state.media.get(clip.id);
+    if (!m || !m.blob) { toast('This recording isn’t on this iPhone.'); return; }
+    var d = new Date(note.createdAt);
+    var type = m.type || m.blob.type || 'audio/mp4';
+    var name = 'daybook-voice-' + note.day + '-' + pad(d.getHours()) + pad(d.getMinutes()) + '.' + audioExtension(type);
+    var file = new File([m.blob], name, { type: type });
+    if (canShareFile(file)) {
+      navigator.share({ files: [file] }).catch(function (err) {
+        if (!err || err.name !== 'AbortError') downloadFile(file);
+      });
+    } else {
+      downloadFile(file);
+    }
+  }
+
+  /* Recording */
+
+  function voiceAvailable() { return !!(Voice && Voice.supported()); }
+
+  var RECORD_ERRORS = {
+    denied: 'Daybook isn’t allowed to use the microphone. To allow it, open the Settings app, find Daybook or Safari, and turn on Microphone. Then try again.',
+    'no-mic': 'No microphone was found.',
+    unsupported: 'Recording isn’t available on this device.',
+    failed: 'The microphone couldn’t be started. Try again.'
+  };
+
+  function buildMeter() {
+    var meter = $('recorder-meter');
+    if (meter.childNodes.length) return;
+    for (var i = 0; i < 32; i++) {
+      var bar = document.createElement('span');
+      meter.appendChild(bar);
+    }
+  }
+
+  function setRecorderView(mode) {
+    var dlg = $('recorder');
+    dlg.classList.toggle('is-live', mode === 'live');
+    $('recorder-stop').disabled = mode !== 'live';
+  }
+
+  function openRecorder() {
+    if (state.recorder || !voiceAvailable()) return;
+    var dlg = $('recorder');
+    stopPlayback();
+    buildMeter();
+    Array.prototype.forEach.call($('recorder-meter').childNodes, function (b) { b.style.transform = 'scaleY(0.06)'; });
+    $('recorder-time').textContent = '0:00';
+    $('recorder-status').textContent = 'Starting the microphone…';
+    setError('recorder-error');
+    setRecorderView('waiting');
+    var rec = { handle: null, day: state.day, startedAt: Date.now(), timer: null, levels: [], wake: null, done: false };
+    state.recorder = rec;
+    if (!dlg.open) dlg.showModal();
+    $('recorder-cancel').focus();
+
+    // Ask straight away, while still inside the tap.
+    Voice.start().then(function (handle) {
+      if (state.recorder !== rec) { handle.cancel(); return; }
+      rec.handle = handle;
+      rec.startedAt = Date.now();
+      handle.onend = function (result) {
+        if (state.recorder === rec) finishRecording(rec, result, 'The recording was interrupted. What was recorded has been kept.');
+      };
+      $('recorder-status').textContent = 'Recording';
+      setRecorderView('live');
+      $('recorder-stop').focus();
+      keepAwake(rec);
+      rec.timer = setInterval(function () { tickRecorder(rec); }, 90);
+    }).catch(function (err) {
+      if (state.recorder !== rec) return;
+      $('recorder-status').textContent = 'Not recording';
+      setError('recorder-error', RECORD_ERRORS[err && err.code] || RECORD_ERRORS.failed);
+      state.recorder = null;
+    });
+  }
+
+  function keepAwake(rec) {
+    try {
+      if (navigator.wakeLock && navigator.wakeLock.request) {
+        navigator.wakeLock.request('screen').then(function (lock) {
+          if (state.recorder === rec) rec.wake = lock;
+          else lock.release().catch(function () {});
+        }).catch(function () {});
+      }
+    } catch (e) { /* the screen may lock; recording then stops and is kept */ }
+  }
+
+  function tickRecorder(rec) {
+    if (!rec.handle || state.recorder !== rec) return;
+    var t = rec.handle.elapsed();
+    $('recorder-time').textContent = Voice.formatDuration(t);
+    rec.levels.push(rec.handle.level());
+    if (rec.levels.length > 32) rec.levels.shift();
+    var bars = $('recorder-meter').childNodes;
+    var offset = bars.length - rec.levels.length;
+    for (var i = 0; i < bars.length; i++) {
+      var v = i >= offset ? rec.levels[i - offset] : 0;
+      bars[i].style.transform = 'scaleY(' + Math.max(0.06, v).toFixed(3) + ')';
+    }
+    if (t >= MAX_RECORDING_S) stopRecorder('That’s an hour, so the recording stopped and was saved.');
+  }
+
+  function stopRecorder(message) {
+    var rec = state.recorder;
+    if (!rec || !rec.handle || rec.done) return Promise.resolve();
+    $('recorder-status').textContent = 'Saving…';
+    setRecorderView('waiting');
+    return rec.handle.stop().then(function (result) { return finishRecording(rec, result, message); });
+  }
+
+  function cancelRecorder() {
+    var rec = state.recorder;
+    if (!rec) { $('recorder').close(); return; }
+    if (rec.handle && rec.handle.elapsed() > 5 && !window.confirm('Throw away this recording?')) return;
+    endRecorder(rec);
+    if (rec.handle) rec.handle.cancel();
+    $('recorder').close();
+  }
+
+  function endRecorder(rec) {
+    rec.done = true;
+    clearInterval(rec.timer);
+    if (rec.wake) rec.wake.release().catch(function () {});
+    rec.wake = null;
+    if (state.recorder === rec) state.recorder = null;
+  }
+
+  function finishRecording(rec, result, message) {
+    if (rec.done) return Promise.resolve();
+    endRecorder(rec);
+    var dlg = $('recorder');
+    if (dlg.open) dlg.close();
+    if (!result || !result.blob || !result.blob.size) {
+      toast('Nothing was recorded. Try again, holding the iPhone a little closer.');
+      return Promise.resolve();
+    }
+    var noteId = newId();
+    var clipId = newId();
+    var now = Date.now();
+    var dur = Math.round(result.duration * 10) / 10;
+    var record = {
+      id: clipId, noteId: noteId, kind: 'audio', blob: result.blob, type: result.type,
+      duration: dur, bytes: result.blob.size, createdAt: now
+    };
+    var note = {
+      id: noteId, day: rec.day, createdAt: rec.startedAt, updatedAt: now, type: 'voice', text: '',
+      audio: [{ id: clipId, dur: dur, mime: result.type }]
+    };
+    return DB.addNoteWithMedia(note, [record]).then(function () {
+      state.media.set(clipId, record);
+      if (note.day === state.day) {
+        state.notes.push(note);
+        state.notes.sort(function (a, b) { return a.createdAt - b.createdAt; });
+        renderNotes();
+        flashNote(note.id);
+        var el = state.els.get(note.id);
+        if (el) el.scrollIntoView({ block: 'nearest' });
+      }
+      toast(message || 'Voice note saved (' + Voice.formatDuration(dur) + ')');
+      requestPersist();
+      refreshNudge();
+    }).catch(function () {
+      toast('Couldn’t save the recording. The iPhone may be short of space.');
+    });
+  }
+
+  function bindRecorder() {
+    var dlg = $('recorder');
+    $('capture-voice').addEventListener('click', function () {
+      commitEdit().then(openRecorder);
+    });
+    $('recorder-stop').addEventListener('click', function () { stopRecorder(); });
+    $('recorder-cancel').addEventListener('click', cancelRecorder);
+    // Escape (or a swipe-down gesture) mustn't throw a recording away by accident.
+    dlg.addEventListener('cancel', function (e) {
+      e.preventDefault();
+      if (!state.recorder) dlg.close();
+    });
+    dlg.addEventListener('close', function () {
+      var rec = state.recorder;
+      if (rec && !rec.handle) endRecorder(rec); // closed while still asking for the microphone
+    });
+  }
+
   /* ---------------- Editing ---------------- */
 
   function findNote(id) {
@@ -538,8 +958,8 @@
       ta.className = 'note-editor';
       ta.value = note.text;
       ta.rows = 1;
-      ta.setAttribute('aria-label', hasPhotos(note) ? 'Caption' : 'Edit note');
-      if (hasPhotos(note)) ta.placeholder = 'Caption';
+      ta.setAttribute('aria-label', hasMedia(note) ? 'Caption' : 'Edit note');
+      if (hasMedia(note)) ta.placeholder = 'Caption';
 
       var meta = document.createElement('p');
       meta.className = 'edit-meta';
@@ -557,6 +977,9 @@
       var pinBtn = iconButton(ICONS.pin, note.pinned ? 'Unpin' : 'Pin to the top of the day', 'edit-icon edit-pin', function () { togglePin(id); });
       pinBtn.setAttribute('aria-pressed', note.pinned ? 'true' : 'false');
       actions.appendChild(pinBtn);
+      if (hasAudio(note)) {
+        actions.appendChild(iconButton(ICONS.share, 'Save or share the recording', 'edit-icon edit-share', function () { shareRecording(id); }));
+      }
       var spacer = document.createElement('span');
       spacer.className = 'spacer';
       actions.appendChild(spacer);
@@ -586,6 +1009,7 @@
   var ICONS = {
     trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10.5 10.5v6M13.5 10.5v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
     todo: '<rect x="4.5" y="4.5" width="15" height="15" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8.3 12.2l2.6 2.6 5-5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    share: '<path d="M12 3.5v11M8 7.5l4-4 4 4M7 11H5.5v9h13v-9H17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
     pin: '<circle cx="12" cy="8.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 13v7.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>'
   };
 
@@ -628,8 +1052,8 @@
     var text = cleanText(ed.textarea.value);
     if (!note) { closeEditor(); return Promise.resolve(); }
     if (!text.trim()) {
-      if (hasPhotos(note)) {
-        text = ''; // a photo note can do without a caption
+      if (hasMedia(note)) {
+        text = ''; // a photo or voice note can do without a caption
       } else {
         state.editing = null;
         document.body.classList.remove('is-editing');
@@ -642,7 +1066,7 @@
     return DB.putNote(updated).then(function () {
       replaceNoteInState(updated);
       closeEditor();
-      toast(hasPhotos(note) ? 'Caption updated' : 'Note updated', function () {
+      toast(hasMedia(note) ? 'Caption updated' : 'Note updated', function () {
         return DB.putNote(before).then(function () { replaceNoteInState(before); renderNotes(); });
       });
     }).catch(function () {
@@ -660,6 +1084,7 @@
     var note = findNote(id);
     if (!note) return Promise.resolve();
     var copy = Object.assign({}, note);
+    if (player.noteId === id) stopPlayback();
     return DB.deleteNote(note).then(function () {
       state.notes = state.notes.filter(function (n) { return n.id !== id; });
       state.editing = null;
@@ -726,7 +1151,7 @@
     var note = findNote(id);
     if (!note) return Promise.resolve();
     var text = ed ? cleanText(ed.textarea.value) : note.text;
-    if (ed && !text.trim() && !hasPhotos(note)) text = note.text; // don't lose a note by pinning it empty
+    if (ed && !text.trim() && !hasMedia(note)) text = note.text; // don't lose a note by pinning it empty
     var updated = Object.assign({}, note, { text: text, updatedAt: Date.now() });
     if (note.pinned) delete updated.pinned;
     else updated.pinned = true;
@@ -1110,6 +1535,7 @@
   function excerptOf(note) {
     var text = Lines.display(String(note.text || '').trim()).split('\n')[0];
     if (text) return text;
+    if (hasAudio(note)) return 'A voice note, ' + Voice.formatDuration(audioOf(note)[0].dur);
     var n = photosOf(note).length;
     return n === 1 ? 'A photo' : n + ' photos';
   }
@@ -1497,7 +1923,10 @@
   function refreshSettings() {
     $('fact-version').textContent = APP_VERSION;
     DB.countNotes().then(function (n) { $('fact-notes').textContent = String(n); }).catch(function () {});
-    DB.countMedia().then(function (n) { $('fact-photos').textContent = String(n); }).catch(function () {});
+    DB.countMediaKinds().then(function (n) {
+      $('fact-photos').textContent = String(n.photos);
+      $('fact-voice').textContent = String(n.audio);
+    }).catch(function () {});
     DB.getMeta('lastBackupAt').then(function (last) {
       $('last-backup').textContent = last ? 'Last backup: ' + fmtStamp.format(last) : 'You haven’t made a backup yet.';
     }).catch(function () {});
@@ -1531,8 +1960,18 @@
     el.hidden = !text;
   }
 
-  function contentsPhrase(notes, photos) {
-    return plural(notes, 'note', 'notes') + (photos ? ' and ' + plural(photos, 'photo', 'photos') : '');
+  // "3 photos and 2 voice recordings" for a list of media records.
+  function mediaParts(list) {
+    var audio = list.filter(DB.isAudio).length;
+    var photos = list.length - audio;
+    var parts = [];
+    if (photos) parts.push(plural(photos, 'photo', 'photos'));
+    if (audio) parts.push(plural(audio, 'voice recording', 'voice recordings'));
+    return parts;
+  }
+
+  function contentsPhrase(notes, media) {
+    return sentence([plural(notes, 'note', 'notes')].concat(mediaParts(media || [])));
   }
 
   /* ---------------- Back up ---------------- */
@@ -1562,7 +2001,7 @@
     showStep(dlg, 'working');
 
     DB.exportAll().then(function (all) {
-      var what = contentsPhrase(all.notes.length, all.media.length);
+      var what = contentsPhrase(all.notes.length, all.media);
       $('backup-working').textContent = 'Encrypting ' + what + '…';
       var data = {
         format: 'daybook-backup',
@@ -1657,16 +2096,19 @@
     if (!(n && typeof n.id === 'string' && n.id.length > 0 && n.id.length < 200 &&
       isDayKey(n.day) && typeof n.text === 'string' &&
       typeof n.createdAt === 'number' && typeof n.updatedAt === 'number')) return false;
-    if (n.photos === undefined) return true;
-    return Array.isArray(n.photos) && n.photos.every(function (p) {
+    if (n.photos !== undefined && !(Array.isArray(n.photos) && n.photos.every(function (p) {
       return p && typeof p.id === 'string' && typeof p.w === 'number' && typeof p.h === 'number';
-    });
+    }))) return false;
+    if (n.audio !== undefined && !(Array.isArray(n.audio) && n.audio.every(function (a) {
+      return a && typeof a.id === 'string' && typeof a.dur === 'number';
+    }))) return false;
+    return true;
   }
 
   function validMedia(m) {
-    return m && typeof m.id === 'string' && typeof m.noteId === 'string' &&
-      m.blob instanceof Blob && m.thumb instanceof Blob &&
-      typeof m.width === 'number' && typeof m.height === 'number';
+    if (!(m && typeof m.id === 'string' && typeof m.noteId === 'string' && m.blob instanceof Blob)) return false;
+    if (DB.isAudio(m)) return typeof m.duration === 'number';
+    return m.thumb instanceof Blob && typeof m.width === 'number' && typeof m.height === 'number';
   }
 
   var RESTORE_ERRORS = {
@@ -1696,16 +2138,16 @@
       return DB.planMerge(notes, media).then(function (plan) {
         state.restorePlan = plan;
         var made = data.exportedAt ? 'This backup was made ' + fmtStamp.format(data.exportedAt) + ' and holds ' : 'This backup holds ';
-        var text = made + contentsPhrase(plan.total, plan.mediaTotal) + '. ';
+        var text = made + contentsPhrase(plan.total, media) + '. ';
         var changes = plan.add.length + plan.update.length + plan.mediaAdd.length;
         if (!changes) {
           text += 'Everything in it is already on this iPhone, so there’s nothing to restore.';
         } else {
           var adds = [];
           if (plan.add.length) adds.push(plural(plan.add.length, 'note', 'notes'));
-          if (plan.mediaAdd.length) adds.push(plural(plan.mediaAdd.length, 'photo', 'photos'));
+          adds = adds.concat(mediaParts(plan.mediaAdd));
           var actions = [];
-          if (adds.length) actions.push('add ' + adds.join(' and '));
+          if (adds.length) actions.push('add ' + sentence(adds));
           if (plan.update.length) actions.push('replace ' + plural(plan.update.length, 'note', 'notes') + ' with the backup’s newer copy');
           text += 'Restoring will ' + sentence(actions) + '. ';
           if (plan.same) text += plural(plan.same, 'note is', 'notes are') + ' already here. ';
@@ -1732,8 +2174,8 @@
       state.restoreBytes = null;
       var parts = [];
       if (n.notes) parts.push(plural(n.notes, 'note', 'notes'));
-      if (n.media) parts.push(plural(n.media, 'photo', 'photos'));
-      $('restore-done-text').textContent = 'Restored ' + parts.join(' and ') + '.';
+      parts = parts.concat(mediaParts(plan.mediaAdd));
+      $('restore-done-text').textContent = 'Restored ' + sentence(parts) + '.';
       showStep(dlg, 'done');
       loadDay();
       refreshNudge();
@@ -1861,6 +2303,7 @@
     bindDialogs();
     bindSearch();
     bindViewer();
+    bindRecorder();
     bindSwipe();
     bindKeys();
     trackOnScreenKeyboard();
@@ -1872,6 +2315,8 @@
         refreshNudge();
       } else {
         saveDraftNow();
+        // iOS stops the microphone in the background, so finish and keep what was recorded.
+        if (state.recorder && state.recorder.handle) stopRecorder('Daybook went into the background, so the recording stopped and was saved.');
       }
     });
     setInterval(function () {
@@ -1890,8 +2335,10 @@
     var empty = $('empty');
     empty.hidden = false;
     empty.textContent = 'Daybook couldn’t open its storage on this iPhone, so notes can’t be saved right now. Close Daybook fully and open it again.';
+    state.storageBroken = true;
     $('capture-add').disabled = true;
     $('capture-photo').disabled = true;
+    updateAddButton();
   }
 
   function start() {
@@ -1903,6 +2350,7 @@
     state.day = todayKey();
     renderHeader();
     bindApp();
+    updateAddButton();
     setupServiceWorker();
     DB.open().then(function () {
       return loadDay();

@@ -6,9 +6,12 @@
  * Never delete or clear an object store, and never drop user data.
  *
  * Stores
- *   notes  { id, day 'YYYY-MM-DD', createdAt, updatedAt, type, text, photos?: [{ id, w, h }] }
+ *   notes  { id, day 'YYYY-MM-DD', createdAt, updatedAt, type, text, pinned?,
+ *            photos?: [{ id, w, h }], audio?: [{ id, dur, mime }] }
  *   meta   { key, value }  small app state (last backup time, unsent draft, ...)
- *   media  { id, noteId, blob, thumb, type, width, height, bytes, createdAt, trashedAt? }   (v2)
+ *   media  photo: { id, noteId, blob, thumb, type, width, height, bytes, createdAt, trashedAt? }   (v2)
+ *          voice: { id, noteId, kind: 'audio', blob, type, duration, bytes, createdAt, trashedAt? }
+ *          (voice notes need no schema change: they share the media store)
  *
  * Deleting a photo or a photo note only marks its media with trashedAt, so Undo
  * can bring it back. Trashed media that no note refers to is removed later by
@@ -89,8 +92,16 @@
     });
   }
 
+  // Every media id a note uses: its photos and its voice recordings.
   function photoIdsOf(note) {
-    return (note && Array.isArray(note.photos)) ? note.photos.map(function (p) { return p.id; }) : [];
+    var ids = [];
+    if (note && Array.isArray(note.photos)) note.photos.forEach(function (p) { ids.push(p.id); });
+    if (note && Array.isArray(note.audio)) note.audio.forEach(function (a) { ids.push(a.id); });
+    return ids;
+  }
+
+  function isAudio(m) {
+    return !!m && (m.kind === 'audio' || String(m.type || '').indexOf('audio/') === 0);
   }
 
   /* ---------- Notes ---------- */
@@ -186,20 +197,28 @@
     }).then(function () { return found; });
   }
 
-  function countMedia() {
+  // Photos and voice recordings kept (not counting ones waiting to be cleared after a delete).
+  function countMediaKinds() {
     return tx('media', 'readonly').then(function (s) {
       return new Promise(function (resolve, reject) {
-        var n = 0;
+        var n = { photos: 0, audio: 0 };
         var cur = s.media.openCursor();
         cur.onsuccess = function () {
           var c = cur.result;
           if (!c) return resolve(n);
-          if (!c.value.trashedAt) n += 1;
+          if (!c.value.trashedAt) {
+            if (isAudio(c.value)) n.audio += 1;
+            else n.photos += 1;
+          }
           c.continue();
         };
         cur.onerror = function () { reject(cur.error); };
       });
     });
+  }
+
+  function countMedia() {
+    return countMediaKinds().then(function (n) { return n.photos; });
   }
 
   // Deletes a note and marks its photos as trashed, in one step.
@@ -356,6 +375,9 @@
     addNoteWithMedia: addNoteWithMedia,
     getMedia: getMedia,
     countMedia: countMedia,
+    countMediaKinds: countMediaKinds,
+    isAudio: isAudio,
+    mediaIdsOf: photoIdsOf,
     deleteNote: deleteNote,
     updateNoteAndTrash: updateNoteAndTrash,
     restoreNote: restoreNote,

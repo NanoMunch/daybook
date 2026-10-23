@@ -6,6 +6,7 @@ A private, day-by-day notebook for iPhone. It's an installable web app: open the
 
 - Notes and photos live only on the phone, in the app's own storage (IndexedDB). This repository holds code only.
 - Photos are shrunk and re-saved on the phone, which drops hidden metadata such as location.
+- Voice notes are recorded on the phone and stored there as audio files. The microphone is used only while the recording panel is open. No speech-to-text service is used; the iPhone keyboard's own dictation is recommended instead.
 - Search and On this day run on the phone. Searches aren't saved or sent anywhere.
 - To-dos, pins and #tags are worked out from the note text on the phone; there is no server-side anything.
 - A strict Content-Security-Policy stops the app from connecting anywhere except its own address, which it uses only to fetch new versions of its code.
@@ -17,5 +18,5 @@ A private, day-by-day notebook for iPhone. It's an installable web app: open the
 - `index.html`, `css/`, `js/`: the app
 - `sw.js`: service worker for offline use and update prompts
 - `manifest.webmanifest`, `icons/`: home-screen install
-- `tests/`: checks run before each release (backup round trip, search and to-do/tag unit checks, browser smoke test, privacy scan)
+- `tests/`: checks run before each release (backup round trip, voice recording with a fake microphone, search and to-do/tag unit checks, browser smoke test, privacy scan)
 - `BUILDLOG.json`: version, stages done, changelog and what's next
