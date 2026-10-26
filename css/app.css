@@ -1340,3 +1340,134 @@ mark {
   .recorder.is-live .recorder-status::before { animation: none; }
   .recorder-meter span { transition: none; }
 }
+
+/* ---------- Smart collections ---------- */
+
+/* The contents page: label in the margin, tiles two ruled lines tall so everything stays on the rules. */
+.search-collections {
+  display: grid;
+  grid-template-columns: var(--margin-x) minmax(0, 1fr);
+  margin-bottom: var(--line);
+}
+.collection-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 8px;
+  margin: 0;
+  padding: 0 var(--gutter) 0 12px;
+  list-style: none;
+}
+.collection-tile {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: var(--line) var(--line);
+  width: 100%;
+  height: calc(var(--line) * 2);
+  margin: 0;
+  padding: 0 4px 0 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+  color: var(--ink);
+}
+.collection-tile:active:not(:disabled) { background: color-mix(in srgb, var(--slip) 80%, transparent); }
+.collection-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.collection-name {
+  overflow: hidden;
+  font-family: var(--serif);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: var(--line);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.collection-count {
+  min-width: 22px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: var(--line);
+  text-align: right;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.collection-hint {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: var(--line);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-soft);
+}
+.collection-tile:disabled { color: var(--ink-soft); opacity: 0.6; }
+.collection-tile:disabled .collection-count { color: var(--ink-soft); font-weight: 400; }
+
+/* Inside a collection: a back button in the margin and the collection's name on the first line. */
+.collection-head {
+  display: grid;
+  grid-template-columns: var(--margin-x) minmax(0, 1fr);
+  align-items: center;
+  height: var(--line);
+  margin-bottom: var(--line);
+}
+.collection-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  height: 44px;
+  margin: -8px 0;
+  padding: 0 8px 0 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 15px;
+}
+.collection-title {
+  margin: 0;
+  padding-left: 12px;
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: var(--line);
+  outline: none;
+}
+
+/* Taps for what was found (open a link, call, email, Maps), sitting in the result's blank line. */
+.result-list li.has-actions { position: relative; }
+.result-list li.has-actions .result { padding-bottom: 0; }
+.result-actions {
+  display: flex;
+  gap: 6px;
+  height: var(--line);
+  margin-bottom: var(--line);
+  padding: 2px var(--gutter) 2px calc(var(--margin-x) + 12px);
+}
+.action-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 230px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--paper-raised);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  line-height: 22px;
+  color: var(--ink);
+  text-decoration: none;
+  /* the chip is 24 px to sit on one ruled line; this widens its tap area to 44 px */
+  position: relative;
+}
+.action-chip::after { content: ""; position: absolute; left: 0; right: 0; top: -10px; bottom: -10px; }
+.action-chip:active { background: var(--slip); }
+.action-verb { flex: none; margin-right: 6px; font-weight: 600; color: var(--accent); }
+.action-what { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

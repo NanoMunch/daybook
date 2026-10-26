@@ -93,9 +93,13 @@
    * Returns { text, ranges, cutStart } with ranges relative to the snippet.
    */
   function snippet(text, termList, lead) {
+    return snippetAt(String(text || ''), highlightRanges(String(text || ''), termList), lead);
+  }
+
+  // The same, for ranges worked out elsewhere (smart collections mark what they found).
+  function snippetAt(text, ranges, lead) {
     text = String(text || '');
     lead = lead || 60;
-    var ranges = highlightRanges(text, termList);
     var start = 0;
     if (ranges.length && ranges[0][0] > lead + 20) {
       start = ranges[0][0] - lead;
@@ -154,6 +158,7 @@
     matchesAll: matchesAll,
     highlightRanges: highlightRanges,
     snippet: snippet,
+    snippetAt: snippetAt,
     run: run,
     buildIndex: buildIndex,
     groupByDay: groupByDay

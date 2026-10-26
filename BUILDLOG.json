@@ -1,14 +1,21 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "schemaVersion": 2,
   "stagesDone": [
     1,
     2,
     3,
     4,
-    5
+    5,
+    6
   ],
   "changelog": [
+    {
+      "date": "2026-10-26",
+      "version": "1.5.0",
+      "stage": 6,
+      "summary": "Smart collections: the search page, with the box empty, opens on a contents page of ten collections with counts: To-dos (notes with boxes still to tick), Links, Photos, Voice notes, Pinned, Addresses, Phone numbers, Emails, Money and Ideas. Notes are sorted on the phone by plain rules (patterns for web addresses, Australian and international phone numbers, $/A$/€/£ amounts, street addresses with Australian states and postcodes, idea phrases such as 'Idea:', 'what if', 'would be cool if', #idea), with no folders and no AI. Inside a collection, what was found is marked in each note, and links, numbers, emails and addresses get small Open / Call / Email / Maps chips (Apple Maps links for addresses; nothing is sent unless the person taps). Typing switches back to normal search. No schema change."
+    },
     {
       "date": "2026-10-23",
       "version": "1.4.0",
@@ -49,7 +56,8 @@
     "Search, On this day and the highlighter marks are tested in headless Chromium only; the iOS keyboard's Search key and focus behaviour are unverified on a real iPhone.",
     "The to-do button is meant to keep the iOS keyboard up, and Return is meant to continue a list; both rely on iOS Safari key and pointer events that are unverified on a real iPhone. Tick boxes are 28 px tall (one ruled line), below Apple's 44 px guideline, though 42 px wide.",
     "Voice recording and playback are tested in headless Chromium with a fake microphone (WebM/Opus) only. On iPhone, MediaRecorder should produce AAC in MP4; recording, seeking, the microphone permission prompt (iOS may ask again each launch of a home-screen app), the wake lock and the orange-dot behaviour are unverified on a real device.",
-    "Browser speech recognition (live transcription) is deliberately not offered: it couldn't be verified on a real iPhone, may not work in home-screen apps, and Apple may process the audio on its servers."
+    "Browser speech recognition (live transcription) is deliberately not offered: it couldn't be verified on a real iPhone, may not work in home-screen apps, and Apple may process the audio on its servers.",
+    "Collection rules are tuned for Australian formats (phone numbers, states, postcodes) and English phrasing; they will miss some addresses and ideas and may occasionally pick up something that isn't one. Collections are tested in headless Chromium only; how iOS opens tel:, mailto:, Apple Maps and outside links from a home-screen app is unverified on a real iPhone."
   ],
-  "nextUp": "Stage 6: auto-sorting on the phone: smart collections with no manual folders (Links, Photos, Voice notes, Places/addresses, Phone numbers, Money, Ideas, To-dos and so on) using rules only."
+  "nextUp": "Stage 7: Agenda: detect dates and times in notes with on-device rules; show what's upcoming; tap to open the note."
 }

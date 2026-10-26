@@ -4,13 +4,14 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.4.0';
+  var APP_VERSION = '1.5.0';
   var DB = window.DaybookDB;
   var Backup = window.DaybookBackup;
   var Photos = window.DaybookPhotos;
   var Voice = window.DaybookVoice;
   var Search = window.DaybookSearch;
   var Lines = window.DaybookLines;
+  var Collections = window.DaybookCollections;
   var MAX_RESULTS = 150;
   var DAY_MS = 86400000;
   var BACKUP_EVERY_DAYS = 7;
@@ -39,7 +40,7 @@
     restorePlan: null,
     addingPhotos: false,
     recorder: null,       // the open voice recording, if any
-    search: { index: null, tags: null, seq: 0, timer: null, urls: [] }
+    search: { index: null, tags: null, sorted: null, collection: null, seq: 0, timer: null, urls: [] }
   };
 
   var viewer = { noteId: null, index: 0, url: null, ratio: 1, zoom: 1, fitW: 0, fitH: 0 };
@@ -1566,9 +1567,13 @@
     if (isSearchOpen()) return;
     closeViewer();
     state.search.index = null;
+    state.search.sorted = null;
+    state.search.collection = null;
     $('search-status').textContent = '';
     $('search-results').textContent = '';
     $('search-tags').hidden = true;
+    $('search-collections').hidden = true;
+    $('collection-head').hidden = true;
     $('search').hidden = false;
     $('search').scrollTop = 0;
     $('search-clear').hidden = !$('search-input').value;
@@ -1581,6 +1586,7 @@
       if (!isSearchOpen()) return;
       state.search.index = Search.buildIndex(notes);
       state.search.tags = Lines.tagIndex(notes);
+      state.search.sorted = Collections.sort(notes);
       return renderSearch();
     }).catch(function () {
       setSearchStatus(['Couldn’t read your notes to search them. Close Daybook fully and open it again.']);
@@ -1592,6 +1598,8 @@
     clearTimeout(state.search.timer);
     state.search.seq += 1;
     state.search.index = null;
+    state.search.sorted = null;
+    state.search.collection = null;
     $('search-input').blur();
     $('search').hidden = true;
     clearSearchThumbs();
@@ -1615,6 +1623,7 @@
   }
 
   function searchSoon() {
+    if ($('search-input').value.trim()) state.search.collection = null;
     $('search-clear').hidden = !$('search-input').value;
     clearTimeout(state.search.timer);
     state.search.timer = setTimeout(renderSearch, 120);
@@ -1628,7 +1637,12 @@
     var query = $('search-input').value;
     $('search-clear').hidden = !query;
     var r = Search.run(index, query);
-    drawTags(r.terms.length ? [] : state.search.tags || []);
+    if (r.terms.length) state.search.collection = null;
+    var inCollection = !r.terms.length && !!state.search.collection;
+    $('collection-head').hidden = !inCollection;
+    drawTags(r.terms.length || inCollection ? [] : state.search.tags || []);
+    drawCollectionGrid(!r.terms.length && !inCollection);
+    if (inCollection) return renderCollection(seq);
     if (!r.terms.length) return renderLookBackView(seq);
 
     if (!r.notes.length) {
@@ -1651,10 +1665,7 @@
   function renderLookBackView(seq) {
     return lookBackDays(true).then(function (groups) {
       if (seq !== state.search.seq) return;
-      setSearchStatus(groups.length
-        ? ['Type to search every note and photo caption.']
-        : ['Type to search every note and photo caption.',
-          'Notes from a week ago, a month ago and this date in earlier years will also show up here.']);
+      setSearchStatus(['Type to search, or open a collection.']);
       return drawGroups(groups, [], seq);
     });
   }
@@ -1692,8 +1703,9 @@
     if (at < text.length) el.appendChild(document.createTextNode(text.slice(at)));
   }
 
-  function resultItem(note, terms, thumbs) {
+  function resultItem(note, terms, thumbs, kind) {
     var li = document.createElement('li');
+    var found = kind ? Collections.find(kind, Lines.display(note.text)) : [];
     var b = document.createElement('button');
     b.type = 'button';
     b.className = 'result';
@@ -1706,7 +1718,10 @@
     var text = document.createElement('span');
     text.className = 'result-text';
     if (String(note.text || '').trim()) {
-      var sn = Search.snippet(Lines.display(note.text), terms);
+      var shown = Lines.display(note.text);
+      var sn = found.length
+        ? Search.snippetAt(shown, found.map(function (f) { return [f.start, f.end]; }))
+        : Search.snippet(shown, terms);
       if (sn.cutStart) text.appendChild(document.createTextNode('…'));
       appendMarked(text, sn.text, sn.ranges);
     } else {
@@ -1730,10 +1745,12 @@
     }
     b.addEventListener('click', function () { openResult(note.day, note.id); });
     li.appendChild(b);
+    var actions = actionLinks(kind, found);
+    if (actions) { li.appendChild(actions); li.className = 'has-actions'; }
     return li;
   }
 
-  function drawGroups(groups, terms, seq) {
+  function drawGroups(groups, terms, seq, kind) {
     var out = $('search-results');
     clearSearchThumbs();
     out.textContent = '';
@@ -1758,7 +1775,7 @@
       section.appendChild(h);
       var list = document.createElement('ol');
       list.className = 'result-list';
-      g.notes.forEach(function (note) { list.appendChild(resultItem(note, terms, thumbs)); });
+      g.notes.forEach(function (note) { list.appendChild(resultItem(note, terms, thumbs, kind)); });
       section.appendChild(list);
       out.appendChild(section);
     });
@@ -1773,6 +1790,121 @@
         t.img.src = url;
       });
     }).catch(function () {});
+  }
+
+  /* ---------------- Smart collections ---------------- */
+
+  var ACTION_VERB = { links: 'Open', emails: 'Email', phones: 'Call', places: 'Maps' };
+
+  // Taps for what a collection found: open a link, call, email, look up in Apple Maps.
+  // These are ordinary links the person chooses to tap; Daybook itself sends nothing.
+  function actionLinks(kind, found) {
+    if (!ACTION_VERB[kind] || !found.length) return null;
+    var row = document.createElement('div');
+    row.className = 'result-actions';
+    var seen = new Set();
+    found.forEach(function (f) {
+      if (!f.href || seen.has(f.href) || seen.size >= 3) return;
+      seen.add(f.href);
+      var a = document.createElement('a');
+      a.className = 'action-chip';
+      a.href = f.href;
+      if (kind === 'links' || kind === 'places') { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      var verb = document.createElement('span');
+      verb.className = 'action-verb';
+      verb.textContent = ACTION_VERB[kind];
+      var what = document.createElement('span');
+      what.className = 'action-what';
+      what.textContent = kind === 'links' ? f.value.replace(/^https?:\/\//i, '').replace(/^www\./i, '') : f.value;
+      a.appendChild(verb);
+      a.appendChild(what);
+      a.setAttribute('aria-label', ACTION_VERB[kind] + ' ' + f.value);
+      row.appendChild(a);
+    });
+    return row;
+  }
+
+  function collectionInfo(kind) {
+    for (var i = 0; i < Collections.kinds.length; i++) if (Collections.kinds[i].kind === kind) return Collections.kinds[i];
+    return null;
+  }
+
+  // The contents page: every collection with how many notes are in it.
+  function drawCollectionGrid(show) {
+    var box = $('search-collections');
+    var grid = $('collection-grid');
+    var sorted = state.search.sorted;
+    box.hidden = !show || !sorted;
+    if (box.hidden) return;
+    grid.textContent = '';
+    Collections.kinds.forEach(function (k) {
+      var n = (sorted.get(k.kind) || []).length;
+      var li = document.createElement('li');
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'collection-tile collection-' + k.kind;
+      b.disabled = n === 0;
+      var name = document.createElement('span');
+      name.className = 'collection-name';
+      name.textContent = k.label;
+      var count = document.createElement('span');
+      count.className = 'collection-count';
+      count.textContent = n ? String(n) : '–';
+      var hint = document.createElement('span');
+      hint.className = 'collection-hint';
+      hint.textContent = n ? k.hint : 'None yet';
+      b.appendChild(name);
+      b.appendChild(count);
+      b.appendChild(hint);
+      b.setAttribute('aria-label', k.label + ', ' + (n ? plural(n, 'note', 'notes') : 'none yet'));
+      b.addEventListener('click', function () { openCollection(k.kind); });
+      li.appendChild(b);
+      grid.appendChild(li);
+    });
+  }
+
+  function openCollection(kind) {
+    state.search.collection = kind;
+    $('search-input').value = '';
+    $('search-clear').hidden = true;
+    $('search-input').blur();
+    $('search').scrollTop = 0;
+    renderSearch();
+    $('collection-title').focus();
+  }
+
+  function closeCollection() {
+    state.search.collection = null;
+    $('search').scrollTop = 0;
+    renderSearch();
+    $('collection-back').blur();
+  }
+
+  var COLLECTION_EMPTY = {
+    todos: 'Every box is ticked. Nice.'
+  };
+
+  function renderCollection(seq) {
+    var kind = state.search.collection;
+    var info = collectionInfo(kind);
+    var notes = (state.search.sorted && state.search.sorted.get(kind)) || [];
+    $('collection-title').textContent = info ? info.label : '';
+    if (!notes.length) {
+      setSearchStatus([COLLECTION_EMPTY[kind] || 'Nothing here any more.']);
+      return drawGroups([], [], seq);
+    }
+    var days = new Set(notes.map(function (n) { return n.day; })).size;
+    var shown = notes.slice(0, MAX_RESULTS);
+    var line = plural(notes.length, 'note', 'notes') + ' on ' + plural(days, 'day', 'days');
+    if (kind === 'todos') {
+      var open = 0;
+      notes.forEach(function (n) { open += Lines.counts(n.text).total - Lines.counts(n.text).done; });
+      line = plural(open, 'box', 'boxes') + ' to tick in ' + plural(notes.length, 'note', 'notes');
+    }
+    setSearchStatus(shown.length < notes.length
+      ? [line + '. The newest ' + shown.length + ' are shown.']
+      : [line]);
+    return drawGroups(Search.groupByDay(shown), [], seq, kind);
   }
 
   // Opens a day from the results, scrolled to the note that was tapped.
@@ -1793,13 +1925,18 @@
       // Search runs as you type; the keyboard's Search key just tucks the keyboard away.
       if (e.key === 'Enter') { e.preventDefault(); renderSearch(); input.blur(); }
     });
+    $('collection-back').addEventListener('click', closeCollection);
     $('search-clear').addEventListener('click', function () {
       input.value = '';
       renderSearch();
       input.focus();
     });
     $('search').addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { e.preventDefault(); closeSearch(true); }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (state.search.collection && !$('search-input').value.trim()) closeCollection();
+        else closeSearch(true);
+      }
     });
     $('look-back-open').addEventListener('click', function () {
       $('search-input').value = '';

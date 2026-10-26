@@ -647,7 +647,7 @@ function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFu
     await page.waitForFunction(() => document.querySelectorAll('.result-day').length > 0);
     const agoLabels = await page.$$eval('.result-ago', (els) => els.map((e) => e.textContent));
     check('empty search shows a week ago and this date in earlier years', JSON.stringify(agoLabels) === '["A week ago","A year ago","2 years ago"]', JSON.stringify(agoLabels));
-    check('empty search explains what search covers', (await page.textContent('#search-status')).includes('Type to search every note'));
+    check('empty search explains what search covers', (await page.textContent('#search-status')).includes('Type to search'));
     await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(OUT, 'search-lookback.png') });
 
@@ -1064,6 +1064,106 @@ function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFu
 
     const csp = await page.evaluate(() => window.__csp);
     check('no CSP violations with voice notes', csp.length === 0, JSON.stringify(csp));
+    await ctx.close();
+  }
+
+  // 8. Smart collections
+  {
+    const ctx = await browser.newContext(PHONE);
+    await ctx.addInitScript(STANDALONE);
+    const page = await ctx.newPage();
+    watch(page);
+    await page.goto(BASE);
+    await page.waitForSelector('#app:not([hidden])');
+    await page.evaluate(async () => {
+      const pad = (n) => String(n).padStart(2, '0');
+      const key = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+      const mk = async (daysBack, text, extra) => {
+        const d = new Date(); d.setHours(10, 0, 0, 0); d.setDate(d.getDate() - daysBack);
+        await window.DaybookDB.putNote(Object.assign({ id: crypto.randomUUID(), day: key(d), createdAt: d.getTime() + text.length, updatedAt: d.getTime(), type: 'text', text }, extra || {}));
+      };
+      await mk(0, 'Recipe at www.example-recipes.com/soup, also see https://abc.net.au/news.');
+      await mk(1, 'Plumber Dave 0412 345 678, quote $240');
+      await mk(2, 'Party at 12 Smith St, Fitzroy VIC 3065 on Saturday');
+      await mk(3, '[ ] milk\n[x] bread\n[ ] eggs');
+      await mk(4, 'Idea: a jar for spare buttons', { pinned: true });
+      await mk(5, 'Ask sam@example.org about lunch');
+    });
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.click('#open-search');
+    await page.waitForSelector('#search-collections:not([hidden])');
+    const tiles = await page.$$eval('.collection-tile', (els) => els.map((e) => e.querySelector('.collection-name').textContent + ':' + e.querySelector('.collection-count').textContent + (e.disabled ? ':off' : '')));
+    check('empty search shows every collection with counts', JSON.stringify(tiles) === JSON.stringify(['To-dos:1', 'Links:1', 'Photos:–:off', 'Voice notes:–:off', 'Pinned:1', 'Addresses:1', 'Phones:1', 'Emails:1', 'Money:1', 'Ideas:1']), JSON.stringify(tiles));
+    check('collection tiles are big enough to tap', await page.$eval('.collection-tile', (e) => e.getBoundingClientRect().height >= 44 && e.getBoundingClientRect().width >= 120));
+    await page.screenshot({ path: path.join(OUT, 'collections.png') });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.screenshot({ path: path.join(OUT, 'collections-dark.png') });
+    await page.emulateMedia({ colorScheme: 'light' });
+
+    const openTile = async (name) => {
+      await page.click(`.collection-tile:has(.collection-name:text-is("${name}"))`);
+      await page.waitForSelector('#collection-head:not([hidden])');
+      await page.waitForFunction(() => document.querySelectorAll('.result').length > 0);
+    };
+    await openTile('Links');
+    check('a collection shows its name and hides the contents page', (await page.textContent('#collection-title')) === 'Links' && await page.isHidden('#search-collections') && await page.isHidden('#search-tags'));
+    const linkMarks = await page.$$eval('mark', (m) => m.map((e) => e.textContent));
+    check('links are marked in the note', JSON.stringify(linkMarks) === JSON.stringify(['www.example-recipes.com/soup', 'https://abc.net.au/news']), JSON.stringify(linkMarks));
+    const linkHrefs = await page.$$eval('.action-chip', (a) => a.map((e) => e.getAttribute('href') + '|' + e.target + '|' + e.rel));
+    check('link chips open the page in Safari, with no referrer', JSON.stringify(linkHrefs) === JSON.stringify(['https://www.example-recipes.com/soup|_blank|noopener noreferrer', 'https://abc.net.au/news|_blank|noopener noreferrer']), JSON.stringify(linkHrefs));
+    await page.screenshot({ path: path.join(OUT, 'collection-links.png') });
+    await page.click('#collection-back');
+    await page.waitForSelector('#search-collections:not([hidden])');
+    check('back returns to the contents page', await page.isHidden('#collection-head'));
+
+    await openTile('Phones');
+    check('phone chip calls the number', (await page.getAttribute('.action-chip', 'href')) === 'tel:0412345678' && (await page.textContent('.action-chip')).includes('Call'));
+    await page.click('#collection-back');
+    await openTile('Addresses');
+    check('address chip opens Apple Maps', (await page.getAttribute('.action-chip', 'href')) === 'https://maps.apple.com/?q=12%20Smith%20St%2C%20Fitzroy%20VIC%203065');
+    await page.click('#collection-back');
+    await openTile('Emails');
+    check('email chip writes an email', (await page.getAttribute('.action-chip', 'href')) === 'mailto:sam@example.org');
+    await page.click('#collection-back');
+    await openTile('Money');
+    check('money is marked', (await page.$$eval('mark', (m) => m.map((e) => e.textContent))).join() === '$240');
+    await page.click('#collection-back');
+    await openTile('To-dos');
+    check('to-dos counts open boxes and marks them', (await page.textContent('#search-status')) === '2 boxes to tick in 1 note' && (await page.$$eval('mark', (m) => m.map((e) => e.textContent))).join() === 'milk,eggs', await page.textContent('#search-status'));
+    await page.screenshot({ path: path.join(OUT, 'collection-todos.png') });
+
+    // Typing leaves the collection for a normal search
+    await page.fill('#search-input', 'plumber');
+    await page.waitForFunction(() => document.getElementById('search-status').textContent === '1 note on 1 day');
+    check('typing switches from a collection to search', await page.isHidden('#collection-head'));
+    await page.fill('#search-input', '');
+    await page.waitForSelector('#search-collections:not([hidden])');
+
+    // Tapping a result opens the day at the note; reopening search starts at the contents page
+    await openTile('Ideas');
+    await page.click('.result');
+    await page.waitForSelector('#search', { state: 'hidden' });
+    await page.waitForFunction(() => [...document.querySelectorAll('.note-text')].some((n) => n.textContent.includes('spare buttons')));
+    check('a collection result opens its day', true);
+    await page.click('#open-search');
+    await page.waitForSelector('#search-collections:not([hidden])');
+    check('search reopens at the contents page', await page.isHidden('#collection-head'));
+
+    // A ticked-off list leaves To-dos straight away
+    await page.click('#close-search');
+    await page.evaluate(async () => {
+      const all = await window.DaybookDB.allNotes();
+      const n = all.find((x) => x.text.startsWith('[ ] milk'));
+      n.text = '[x] milk\n[x] bread\n[x] eggs';
+      await window.DaybookDB.putNote(n);
+    });
+    await page.click('#open-search');
+    await page.waitForSelector('#search-collections:not([hidden])');
+    check('a fully ticked list leaves To-dos', await page.$eval('.collection-todos', (e) => e.disabled));
+
+    const csp = await page.evaluate(() => window.__csp);
+    check('no CSP violations with collections', csp.length === 0, JSON.stringify(csp));
     await ctx.close();
   }
 
