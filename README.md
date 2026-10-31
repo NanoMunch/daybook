@@ -10,6 +10,7 @@ A private, day-by-day notebook for iPhone. It's an installable web app: open the
 - Search and On this day run on the phone. Searches aren't saved or sent anywhere.
 - To-dos, pins and #tags are worked out from the note text on the phone; there is no server-side anything.
 - Collections (Links, Phones, Addresses, Money, Ideas and so on) are sorted on the phone by plain pattern rules, with no AI. Links, numbers and addresses only leave the app if the person taps them (Safari, Phone, Mail or Apple Maps).
+- The agenda (Coming up) finds dates and times in notes on the phone with plain rules. Nothing is added to a calendar or sent anywhere.
 - A strict Content-Security-Policy stops the app from connecting anywhere except its own address, which it uses only to fetch new versions of its code.
 - No analytics, trackers, third-party scripts or outside fonts.
 - Backups are single `.daybook` files encrypted on the phone (PBKDF2-SHA-256, 600,000 iterations, AES-256-GCM) with a password that is never stored.
@@ -19,5 +20,5 @@ A private, day-by-day notebook for iPhone. It's an installable web app: open the
 - `index.html`, `css/`, `js/`: the app
 - `sw.js`: service worker for offline use and update prompts
 - `manifest.webmanifest`, `icons/`: home-screen install
-- `tests/`: checks run before each release (backup round trip, voice recording with a fake microphone, search, to-do/tag and collection unit checks, browser smoke test, privacy scan)
+- `tests/`: checks run before each release (backup round trip, voice recording with a fake microphone, search, to-do/tag, collection and agenda unit checks, browser smoke test, privacy scan)
 - `BUILDLOG.json`: version, stages done, changelog and what's next

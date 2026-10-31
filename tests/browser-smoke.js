@@ -657,7 +657,7 @@ function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFu
       await page.waitForTimeout(250);
     };
     await typeQuery('zoe');
-    check('accent-insensitive search with the original spelling highlighted', (await page.$$eval('mark', (m) => m.map((e) => e.textContent))).join() === 'Zoë');
+    check('accent-insensitive search with the original spelling highlighted', (await page.$$eval('#search-results mark', (m) => m.map((e) => e.textContent))).join() === 'Zoë');
     await typeQuery('kitchen plumber');
     check('every word must match, in any order', (await page.textContent('#search-status')) === '1 note on 1 day' && (await page.$$('.result')).length === 1, await page.textContent('#search-status'));
     await typeQuery('plumber');
@@ -1108,7 +1108,7 @@ function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFu
     };
     await openTile('Links');
     check('a collection shows its name and hides the contents page', (await page.textContent('#collection-title')) === 'Links' && await page.isHidden('#search-collections') && await page.isHidden('#search-tags'));
-    const linkMarks = await page.$$eval('mark', (m) => m.map((e) => e.textContent));
+    const linkMarks = await page.$$eval('#search-results mark', (m) => m.map((e) => e.textContent));
     check('links are marked in the note', JSON.stringify(linkMarks) === JSON.stringify(['www.example-recipes.com/soup', 'https://abc.net.au/news']), JSON.stringify(linkMarks));
     const linkHrefs = await page.$$eval('.action-chip', (a) => a.map((e) => e.getAttribute('href') + '|' + e.target + '|' + e.rel));
     check('link chips open the page in Safari, with no referrer', JSON.stringify(linkHrefs) === JSON.stringify(['https://www.example-recipes.com/soup|_blank|noopener noreferrer', 'https://abc.net.au/news|_blank|noopener noreferrer']), JSON.stringify(linkHrefs));
@@ -1127,10 +1127,10 @@ function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFu
     check('email chip writes an email', (await page.getAttribute('.action-chip', 'href')) === 'mailto:sam@example.org');
     await page.click('#collection-back');
     await openTile('Money');
-    check('money is marked', (await page.$$eval('mark', (m) => m.map((e) => e.textContent))).join() === '$240');
+    check('money is marked', (await page.$$eval('#search-results mark', (m) => m.map((e) => e.textContent))).join() === '$240');
     await page.click('#collection-back');
     await openTile('To-dos');
-    check('to-dos counts open boxes and marks them', (await page.textContent('#search-status')) === '2 boxes to tick in 1 note' && (await page.$$eval('mark', (m) => m.map((e) => e.textContent))).join() === 'milk,eggs', await page.textContent('#search-status'));
+    check('to-dos counts open boxes and marks them', (await page.textContent('#search-status')) === '2 boxes to tick in 1 note' && (await page.$$eval('#search-results mark', (m) => m.map((e) => e.textContent))).join() === 'milk,eggs', await page.textContent('#search-status'));
     await page.screenshot({ path: path.join(OUT, 'collection-todos.png') });
 
     // Typing leaves the collection for a normal search
@@ -1164,6 +1164,94 @@ function dayKey(d) { const p = (n) => String(n).padStart(2, '0'); return d.getFu
 
     const csp = await page.evaluate(() => window.__csp);
     check('no CSP violations with collections', csp.length === 0, JSON.stringify(csp));
+    await ctx.close();
+  }
+
+  // 9. Agenda: Coming up and Planned for this day
+  {
+    const ctx = await browser.newContext(PHONE);
+    await ctx.addInitScript(STANDALONE);
+    const page = await ctx.newPage();
+    watch(page);
+    await page.goto(BASE);
+    await page.waitForSelector('#app:not([hidden])');
+    check('agenda button is in the header and big enough to tap', await page.$eval('#open-agenda', (e) => { const r = e.getBoundingClientRect(); return r.width >= 40 && r.height >= 44; }));
+    check('header still fits the longest day name', await page.evaluate(() => {
+      const w = document.getElementById('weekday');
+      const old = w.textContent;
+      w.textContent = 'Wednesday';
+      const fits = w.scrollWidth <= w.clientWidth + 1 && w.getBoundingClientRect().right <= document.querySelector('.nav').getBoundingClientRect().left + 1;
+      w.textContent = old;
+      return fits;
+    }));
+    await page.evaluate(async () => {
+      const pad = (n) => String(n).padStart(2, '0');
+      const key = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+      const mk = async (daysBack, text) => {
+        const d = new Date(); d.setHours(8, 0, 0, 0); d.setDate(d.getDate() - daysBack);
+        await window.DaybookDB.putNote({ id: crypto.randomUUID(), day: key(d), createdAt: d.getTime() + text.length, updatedAt: d.getTime(), type: 'text', text });
+      };
+      await mk(3, 'Haircut in 3 days 11:59pm');
+      await mk(1, '[ ] Book vet in 2 days\n[x] Pay water bill in 2 days');
+      await mk(0, 'Call Jo tomorrow 9am');
+      await mk(2, 'Grocery list: eggs, bread');
+    });
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#planned:not([hidden])');
+    check('today shows what was planned for it on other days', (await page.textContent('#planned-title')) === 'Planned for today' && (await page.textContent('#planned-list')).includes('Haircut'), await page.textContent('#planned'));
+    check('planned slip doesn’t repeat notes already on the page', !(await page.textContent('#planned-list')).includes('Call Jo'));
+    await page.screenshot({ path: path.join(OUT, 'planned-today.png') });
+
+    await page.click('#open-agenda');
+    await page.waitForSelector('#agenda:not([hidden])');
+    await page.waitForFunction(() => document.querySelectorAll('.agenda-item').length > 0);
+    const rows = await page.$$eval('.agenda-item', (els) => els.map((e) => e.querySelector('.agenda-time').textContent + '|' + e.querySelector('.result-text').textContent));
+    check('agenda lists upcoming items in order', rows.length === 3 && rows[0].includes('Haircut') && /Call Jo|Book vet/.test(rows[1]) && /Call Jo|Book vet/.test(rows[2]), JSON.stringify(rows));
+    check('ticked to-dos are left out of the agenda', !rows.some((r) => r.includes('water bill')));
+    check('to-dos with no time say all day', rows.some((r) => r.startsWith('all day|☐ Book vet')), JSON.stringify(rows));
+    const heads = await page.$$eval('.agenda-day .result-ago', (els) => els.map((e) => e.textContent));
+    check('agenda days are labelled Today and Tomorrow', JSON.stringify(heads) === JSON.stringify(['Today', 'Tomorrow']), JSON.stringify(heads));
+    const marks = await page.$$eval('.agenda-item mark', (m) => m.map((e) => e.textContent));
+    check('date and time words are marked', marks.includes('in 3 days') && marks.includes('11:59pm') && marks.includes('tomorrow'), JSON.stringify(marks));
+    check('items from other days say when they were written', (await page.textContent('.agenda-item')).includes('Written'));
+    check('agenda status counts the week', (await page.textContent('#agenda-status')) === '3 things in the next 7 days', await page.textContent('#agenda-status'));
+    await page.screenshot({ path: path.join(OUT, 'agenda.png') });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.screenshot({ path: path.join(OUT, 'agenda-dark.png') });
+    await page.emulateMedia({ colorScheme: 'light' });
+
+    // Tapping an item opens the note's own day at the note
+    await page.click('#agenda .agenda-item:has-text("Haircut")');
+    await page.waitForSelector('#agenda', { state: 'hidden' });
+    await page.waitForFunction(() => document.querySelector('.note.is-found') && document.querySelector('.note.is-found').textContent.includes('Haircut'));
+    check('an agenda item opens the day it was written on', true);
+
+    // A new note shows up straight away, and on its day's page
+    await page.click('#go-today');
+    await page.fill('#capture-text', 'Lunch with Ana in 5 days at 12:30');
+    await page.click('#capture-add');
+    await page.waitForFunction(() => [...document.querySelectorAll('.note-text')].some((n) => n.textContent.includes('Lunch with Ana')));
+    await page.click('#open-agenda').catch(() => {});
+    await page.waitForFunction(() => [...document.querySelectorAll('.agenda-item')].some((n) => n.textContent.includes('Lunch with Ana')));
+    check('a new note appears in the agenda without reloading', true);
+    await page.click('.agenda-day:has-text("Lunch with Ana") .result-day-head');
+    await page.waitForSelector('#agenda', { state: 'hidden' });
+    await page.waitForSelector('#planned:not([hidden])');
+    check('a future day shows what is planned for it', (await page.textContent('#planned-title')) === 'Planned for this day' && (await page.textContent('#planned-list')).includes('Lunch with Ana'));
+    await page.click('#planned-list .planned-item');
+    await page.waitForFunction(() => document.querySelector('.note.is-found') && document.querySelector('.note.is-found').textContent.includes('Lunch with Ana'));
+    check('tapping a planned line opens the note', true);
+
+    // Escape closes, and search and agenda don't stack
+    await page.click('#open-agenda');
+    await page.waitForSelector('#agenda:not([hidden])');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#agenda', { state: 'hidden' });
+    check('Escape closes the agenda', true);
+
+    const csp = await page.evaluate(() => window.__csp);
+    check('no CSP violations with the agenda', csp.length === 0, JSON.stringify(csp));
     await ctx.close();
   }
 

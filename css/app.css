@@ -1471,3 +1471,117 @@ mark {
 .action-chip:active { background: var(--slip); }
 .action-verb { flex: none; margin-right: 6px; font-weight: 600; color: var(--accent); }
 .action-what { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* ---------- Agenda: Coming up ---------- */
+
+/* Four buttons share the top right; keep the day's name readable beside them.
+   The date line runs on underneath the buttons, so the full date has room. */
+.top-row { --nav-w: 168px; }
+.nav .icon-btn { width: 40px; }
+.nav { position: relative; z-index: 1; }
+.dateline { grid-column: 2 / span 2; }
+.weekday { max-width: calc(100% - var(--nav-w)); white-space: nowrap; }
+@media (max-width: 400px) {
+  .weekday { font-size: 26px; }
+}
+@media (max-width: 380px) {
+  .top-row { --nav-w: 160px; }
+  .nav .icon-btn { width: 38px; }
+}
+
+.agenda-bar { padding-left: calc(var(--safe-left) + var(--margin-x) + 12px); }
+.agenda-title {
+  flex: 1;
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 44px;
+  letter-spacing: -0.01em;
+}
+.agenda-day.is-today .result-date { color: var(--accent); }
+.agenda-day.is-today .result-date::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 8px 2px 0;
+  border-radius: 4px;
+  background: var(--margin);
+}
+.agenda-day.is-earlier { opacity: 0.72; }
+.agenda-time.is-allday { font-style: italic; }
+/* The words that set the date are underlined in red pencil rather than highlighted. */
+.agenda-item mark,
+.planned-item mark {
+  background: none;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--margin);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+.agenda-item.is-past .result-text,
+.agenda-item.is-past .agenda-time { color: var(--ink-soft); }
+.agenda-from {
+  font-size: 12.5px;
+  line-height: var(--line);
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agenda-item .agenda-from { grid-column: 2; padding-left: 12px; }
+.agenda-item:has(.agenda-from) { padding-bottom: 0; }
+.agenda-foot { display: flex; justify-content: center; margin-bottom: var(--line); }
+.agenda-foot .btn { min-height: 44px; }
+.agenda-help {
+  margin: 0;
+  padding-left: calc(var(--margin-x) + 12px);
+  font-size: 14px;
+  line-height: var(--line);
+  color: var(--ink-soft);
+}
+
+/* "Planned for this day" slip on the page */
+.planned { box-shadow: inset 3px 0 0 var(--accent); }
+.planned-title { margin-bottom: 2px; font-weight: 600; }
+.planned-list { margin: 0 0 4px; padding: 0; list-style: none; }
+.planned-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: inherit;
+}
+.planned-item:active { background: color-mix(in srgb, var(--paper) 50%, transparent); border-radius: 6px; }
+.planned-item .agenda-time {
+  min-width: 52px;
+  padding-right: 0;
+  text-align: left;
+  font-size: 13px;
+  line-height: 22px;
+}
+.planned-item .result-text {
+  padding-left: 0;
+  font-size: 16px;
+  line-height: 22px;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.planned-item .agenda-from { grid-column: 2; line-height: 18px; }
+.planned-more {
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 14px;
+  color: var(--accent);
+}

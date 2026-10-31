@@ -4,7 +4,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.5.0';
+  var APP_VERSION = '1.6.0';
   var DB = window.DaybookDB;
   var Backup = window.DaybookBackup;
   var Photos = window.DaybookPhotos;
@@ -12,6 +12,7 @@
   var Search = window.DaybookSearch;
   var Lines = window.DaybookLines;
   var Collections = window.DaybookCollections;
+  var Agenda = window.DaybookAgenda;
   var MAX_RESULTS = 150;
   var DAY_MS = 86400000;
   var BACKUP_EVERY_DAYS = 7;
@@ -40,7 +41,9 @@
     restorePlan: null,
     addingPhotos: false,
     recorder: null,       // the open voice recording, if any
-    search: { index: null, tags: null, sorted: null, collection: null, seq: 0, timer: null, urls: [] }
+    search: { index: null, tags: null, sorted: null, collection: null, seq: 0, timer: null, urls: [] },
+    // Dates found in notes. Rebuilt after any change to the notes (see watchWrites).
+    agenda: { items: null, stamp: 0, builtAt: -1, earlier: false, seq: 0, plannedSeq: 0 }
   };
 
   var viewer = { noteId: null, index: 0, url: null, ratio: 1, zoom: 1, fitW: 0, fitH: 0 };
@@ -69,6 +72,8 @@
   var fmtTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
   var fmtStamp = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   var fmtDayLong = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  var fmtDayShort = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  var fmtDayAgenda = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
 
   function formatBytes(n) {
     if (!isFinite(n)) return '–';
@@ -336,6 +341,7 @@
       state.media = media;
       renderNotes();
       refreshLookBack();
+      refreshPlanned();
       if (direction) {
         turnPage(direction);
         window.scrollTo(0, 0);
@@ -1566,6 +1572,7 @@
   function openSearch(focusInput) {
     if (isSearchOpen()) return;
     closeViewer();
+    closeAgenda(false);
     state.search.index = null;
     state.search.sorted = null;
     state.search.collection = null;
@@ -1948,6 +1955,241 @@
     });
   }
 
+  /* ---------------- Agenda: dates found in notes ---------------- */
+
+  // Any change to the notes means the agenda must be worked out again.
+  function watchWrites() {
+    ['putNote', 'addNoteWithMedia', 'deleteNote', 'updateNoteAndTrash', 'restoreNote', 'applyMerge'].forEach(function (name) {
+      var original = DB[name];
+      if (typeof original !== 'function') return;
+      DB[name] = function () {
+        state.agenda.stamp += 1;
+        return original.apply(DB, arguments).then(function (r) {
+          state.agenda.stamp += 1;
+          return r;
+        }, function (err) {
+          state.agenda.stamp += 1;
+          throw err;
+        });
+      };
+    });
+  }
+
+  function agendaItems() {
+    var a = state.agenda;
+    if (a.items && a.builtAt === a.stamp) return Promise.resolve(a.items);
+    var stamp = a.stamp;
+    return DB.allNotes().then(function (notes) {
+      var items = Agenda.build(notes);
+      if (stamp === a.stamp) { a.items = items; a.builtAt = stamp; }
+      return items;
+    });
+  }
+
+  function isAgendaOpen() { return !$('agenda').hidden; }
+
+  function nowTime() {
+    var d = new Date();
+    return pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function timeLabel(hhmm) {
+    var d = new Date(2000, 0, 1, +hhmm.slice(0, 2), +hhmm.slice(3, 5));
+    return fmtTime.format(d);
+  }
+
+  function agendaDayLabel(day) {
+    var n = -daysAgo(day);
+    if (n === 0) return 'Today';
+    if (n === 1) return 'Tomorrow';
+    if (n === -1) return 'Yesterday';
+    if (n < 0) return relativeDay(day);
+    if (n < 7) return 'In ' + n + ' days';
+    if (n < 14) return 'Next week';
+    if (n < 60) return 'In ' + Math.round(n / 7) + ' weeks';
+    var months = Math.round(n / 30.4);
+    if (months < 12) return 'In ' + months + ' months';
+    return n < 548 ? 'In a year' : 'In ' + Math.round(n / 365) + ' years';
+  }
+
+  // One line of the agenda: the time in the margin, the words with the date marked.
+  function agendaRow(item, showFrom) {
+    var li = document.createElement('li');
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'result agenda-item';
+    var today = todayKey();
+    if (item.date < today || (item.date === today && item.time && item.time < nowTime())) b.classList.add('is-past');
+
+    var time = document.createElement('span');
+    time.className = 'result-time agenda-time';
+    time.textContent = item.time ? timeLabel(item.time) : 'all day';
+    if (!item.time) time.classList.add('is-allday');
+
+    var text = document.createElement('span');
+    text.className = 'result-text';
+    appendMarked(text, item.text, item.marks);
+    b.appendChild(time);
+    b.appendChild(text);
+
+    if (showFrom && item.noteDay !== item.date) {
+      var from = document.createElement('span');
+      from.className = 'agenda-from';
+      from.textContent = 'Written ' + fmtDayShort.format(parseDay(item.noteDay));
+      b.appendChild(from);
+    }
+    b.setAttribute('aria-label', (item.time ? timeLabel(item.time) + ', ' : 'All day, ') + item.text +
+      (item.noteDay !== item.date ? ', written ' + fmtShort.format(parseDay(item.noteDay)) : ''));
+    b.addEventListener('click', function () { openAgendaItem(item); });
+    li.appendChild(b);
+    return li;
+  }
+
+  function openAgenda() {
+    if (isAgendaOpen()) return;
+    closeViewer();
+    closeSearch(false);
+    state.agenda.earlier = false;
+    $('agenda-list').textContent = '';
+    $('agenda-status').textContent = '';
+    $('agenda').hidden = false;
+    $('agenda').scrollTop = 0;
+    $('close-agenda').focus();
+    commitEdit().then(renderAgenda).catch(function () {
+      $('agenda-status').textContent = 'Couldn’t read your notes. Close Daybook fully and open it again.';
+    });
+  }
+
+  function closeAgenda(restoreFocus) {
+    if (!isAgendaOpen()) return;
+    state.agenda.seq += 1;
+    $('agenda').hidden = true;
+    $('agenda-list').textContent = '';
+    if (restoreFocus) $('open-agenda').focus();
+  }
+
+  var AGENDA_MAX = 200;
+  var AGENDA_EARLIER_DAYS = 14;
+
+  function renderAgenda() {
+    var seq = ++state.agenda.seq;
+    return agendaItems().then(function (items) {
+      if (seq !== state.agenda.seq || !isAgendaOpen()) return;
+      var today = todayKey();
+      var from = state.agenda.earlier ? addDays(today, -AGENDA_EARLIER_DAYS) : today;
+      var shown = items.filter(function (it) { return it.date >= from; });
+      var upcoming = shown.filter(function (it) { return it.date >= today; }).length;
+      var cut = shown.length > AGENDA_MAX;
+      shown = shown.slice(0, AGENDA_MAX);
+
+      var status = $('agenda-status');
+      status.textContent = '';
+      var p = document.createElement('p');
+      if (!items.length) {
+        p.textContent = 'Nothing yet. Write a day or a time in any note, like “dentist Fri 3pm” or “Mum’s birthday 12 Dec”, and it shows up here.';
+      } else if (!upcoming) {
+        p.textContent = 'Nothing coming up.';
+      } else {
+        var week = shown.filter(function (it) { return it.date >= today && it.date < addDays(today, 7); }).length;
+        p.textContent = week
+          ? plural(week, 'thing', 'things') + ' in the next 7 days' + (upcoming > week ? ', ' + (upcoming - week) + ' later' : '')
+          : 'Nothing in the next 7 days, ' + upcoming + ' later';
+        if (cut) p.textContent += '. The first ' + AGENDA_MAX + ' are shown.';
+      }
+      status.appendChild(p);
+
+      var out = $('agenda-list');
+      out.textContent = '';
+      var groups = [];
+      shown.forEach(function (it) {
+        var g = groups[groups.length - 1];
+        if (!g || g.day !== it.date) { g = { day: it.date, items: [] }; groups.push(g); }
+        g.items.push(it);
+      });
+      groups.forEach(function (g) {
+        var section = document.createElement('section');
+        section.className = 'result-day agenda-day' + (g.day === today ? ' is-today' : '') + (g.day < today ? ' is-earlier' : '');
+        var h = document.createElement('h3');
+        var head = document.createElement('button');
+        head.type = 'button';
+        head.className = 'result-day-head';
+        var date = document.createElement('span');
+        date.className = 'result-date';
+        date.textContent = (g.day.slice(0, 4) === today.slice(0, 4) ? fmtDayAgenda : fmtDayLong).format(parseDay(g.day));
+        var ago = document.createElement('span');
+        ago.className = 'result-ago';
+        ago.textContent = agendaDayLabel(g.day);
+        head.appendChild(date);
+        head.appendChild(ago);
+        head.setAttribute('aria-label', 'Open ' + fmtDayLong.format(parseDay(g.day)));
+        head.addEventListener('click', function () { closeAgenda(false); goTo(g.day).then(function () { window.scrollTo(0, 0); }); });
+        h.appendChild(head);
+        section.appendChild(h);
+        var list = document.createElement('ol');
+        list.className = 'result-list';
+        g.items.forEach(function (it) { list.appendChild(agendaRow(it, true)); });
+        section.appendChild(list);
+        out.appendChild(section);
+      });
+
+      var more = $('agenda-earlier');
+      more.hidden = !items.some(function (it) { return it.date < today && it.date >= addDays(today, -AGENDA_EARLIER_DAYS); }) && !state.agenda.earlier;
+      more.textContent = state.agenda.earlier ? 'Hide the last two weeks' : 'Show the last two weeks';
+      more.setAttribute('aria-expanded', state.agenda.earlier ? 'true' : 'false');
+    });
+  }
+
+  function openAgendaItem(item) {
+    closeAgenda(false);
+    goTo(item.noteDay).then(function () { revealNote(item.noteId); });
+  }
+
+  // "Planned for this day": dates in notes written on other days that point at this page.
+  function refreshPlanned() {
+    var slip = $('planned');
+    var day = state.day;
+    var seq = ++state.agenda.plannedSeq;
+    return agendaItems().then(function (items) {
+      if (seq !== state.agenda.plannedSeq || state.day !== day) return;
+      var here = items.filter(function (it) { return it.date === day && it.noteDay !== day; });
+      // One line per note is plenty here.
+      var seen = new Set();
+      here = here.filter(function (it) { if (seen.has(it.noteId)) return false; seen.add(it.noteId); return true; });
+      slip.hidden = !here.length;
+      if (!here.length) return;
+      $('planned-title').textContent = day === todayKey() ? 'Planned for today' : 'Planned for this day';
+      var list = $('planned-list');
+      list.textContent = '';
+      here.slice(0, 3).forEach(function (it) {
+        var li = agendaRow(it, false);
+        li.firstChild.classList.remove('result', 'agenda-item');
+        li.firstChild.classList.add('planned-item');
+        var from = document.createElement('span');
+        from.className = 'agenda-from';
+        from.textContent = 'from ' + fmtDayShort.format(parseDay(it.noteDay));
+        li.firstChild.appendChild(from);
+        list.appendChild(li);
+      });
+      var rest = here.length - 3;
+      $('planned-more').hidden = rest <= 0;
+      $('planned-more').textContent = rest > 0 ? 'and ' + rest + ' more in Coming up' : '';
+      alignToRules(slip);
+    }).catch(function () { slip.hidden = true; });
+  }
+
+  function bindAgenda() {
+    $('open-agenda').addEventListener('click', openAgenda);
+    $('close-agenda').addEventListener('click', function () { closeAgenda(true); });
+    $('agenda-earlier').addEventListener('click', function () {
+      state.agenda.earlier = !state.agenda.earlier;
+      renderAgenda();
+    });
+    $('agenda').addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); closeAgenda(true); }
+    });
+    $('planned-more').addEventListener('click', openAgenda);
+  }
+
   /* ---------------- Swipe between days ---------------- */
 
   function bindSwipe() {
@@ -1991,11 +2233,12 @@
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
       var t = e.target;
       if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT')) return;
-      if (document.querySelector('dialog[open]') || !$('settings').hidden || isSearchOpen()) return;
+      if (document.querySelector('dialog[open]') || !$('settings').hidden || isSearchOpen() || isAgendaOpen()) return;
       if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
       else if (e.key === 't') { e.preventDefault(); goTo(todayKey()); }
       else if (e.key === '/') { e.preventDefault(); openSearch(true); }
+      else if (e.key === 'a') { e.preventDefault(); openAgenda(); }
     });
   }
 
@@ -2439,6 +2682,7 @@
 
     bindDialogs();
     bindSearch();
+    bindAgenda();
     bindViewer();
     bindRecorder();
     bindSwipe();
@@ -2450,6 +2694,7 @@
         checkForUpdate();
         if (state.followToday && state.day !== todayKey() && !state.editing && !viewer.noteId) goTo(todayKey());
         refreshNudge();
+        if (isAgendaOpen()) renderAgenda();
       } else {
         saveDraftNow();
         // iOS stops the microphone in the background, so finish and keep what was recorded.
@@ -2462,10 +2707,12 @@
     window.addEventListener('resize', function () {
       alignToRules($('backup-nudge'));
       alignToRules($('look-back'));
+      alignToRules($('planned'));
       if (viewer.noteId) layoutViewer();
     });
 
     DB.onVersionChange = function () { $('update-banner').hidden = false; };
+    watchWrites();
   }
 
   function showStorageError() {

@@ -25,6 +25,7 @@
   <script src="js/search.js" defer></script>
   <script src="js/lines.js" defer></script>
   <script src="js/collections.js" defer></script>
+  <script src="js/agenda.js" defer></script>
   <script src="js/app.js" defer></script>
 </head>
 <body>
@@ -59,6 +60,9 @@
           <input type="date" id="date-picker" class="date-picker" aria-label="Choose a day">
         </div>
         <div class="nav">
+          <button type="button" class="icon-btn" id="open-agenda" aria-label="Coming up">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.2 14.6l2 2 3.8-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
           <button type="button" class="icon-btn" id="open-search" aria-label="Search and collections">
             <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M15 15l5 5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
           </button>
@@ -89,6 +93,11 @@
           <button type="button" class="btn btn-quiet" id="look-back-hide">Hide</button>
           <button type="button" class="btn btn-primary" id="look-back-open">Look back</button>
         </div>
+      </div>
+      <div id="planned" class="nudge planned" hidden>
+        <p id="planned-title" class="nudge-text planned-title"></p>
+        <ol id="planned-list" class="planned-list"></ol>
+        <button type="button" id="planned-more" class="planned-more" hidden></button>
       </div>
       <div id="sheet-turn" class="sheet-turn">
         <div id="notes" class="notes"></div>
@@ -149,6 +158,22 @@
       </div>
     </section>
 
+    <!-- Agenda: dates and times found in notes -->
+    <section id="agenda" class="search agenda" hidden aria-labelledby="agenda-title">
+      <div class="search-bar agenda-bar">
+        <h2 id="agenda-title" class="agenda-title">Coming up</h2>
+        <button type="button" class="btn btn-quiet search-done" id="close-agenda">Done</button>
+      </div>
+      <div class="search-sheet">
+        <div id="agenda-status" class="search-status" aria-live="polite"></div>
+        <div id="agenda-list" class="search-results agenda-list"></div>
+        <div class="agenda-foot">
+          <button type="button" id="agenda-earlier" class="btn btn-quiet" hidden aria-expanded="false">Show the last two weeks</button>
+        </div>
+        <p class="agenda-help">Days and times are picked out of your notes on this iPhone by simple rules: words like <em>tomorrow</em>, <em>Friday</em>, <em>next Tue</em>, <em>12 Nov</em>, <em>12/11</em>, <em>in 3 days</em>, and times like <em>3pm</em> or <em>15:30</em>. A day name means the next one after the note’s own page. Ticked to-dos drop off.</p>
+      </div>
+    </section>
+
     <!-- Settings -->
     <section id="settings" class="settings" hidden aria-labelledby="settings-title">
       <div class="settings-bar">
@@ -181,6 +206,7 @@
           <p class="group-help">Search and On this day work on this iPhone too. What you search for isn’t saved or sent anywhere.</p>
           <p class="group-help">To-dos, pins and #tags are worked out from your own text on this iPhone, like everything else.</p>
           <p class="group-help">Collections (Links, Money, Addresses and the rest) are sorted on this iPhone by simple rules that look at your text. Nothing is sent anywhere to sort them. A link, number or address only goes anywhere if you tap it: links open in Safari, numbers in Phone, addresses in Apple Maps.</p>
+          <p class="group-help">Coming up (the calendar button) finds days and times in your notes on this iPhone with simple rules. Nothing is added to your Calendar or sent anywhere.</p>
           <p class="group-help">Photos are re-saved on your iPhone without their hidden details, such as where they were taken. Photos you take with Daybook’s camera normally aren’t added to your Photos app. To keep a copy there, open the photo and tap Save.</p>
           <p class="group-help">Voice notes are recorded and kept only on this iPhone. Daybook uses the microphone only while the recording panel is open, and the iPhone shows its orange dot while it does.</p>
         </section>
@@ -192,6 +218,7 @@
             <li>Open a note and tap the <strong>pin</strong> to keep it at the top of that day.</li>
             <li>With the note box empty, tap the <strong>microphone</strong> to record a voice note. Tap the note’s words to add a caption, which search can find.</li>
             <li>Rather have it written? Tap the microphone on the <strong>iPhone keyboard</strong> to dictate into the note box. iPhones with on-device dictation do this without sending your voice anywhere.</li>
+            <li>Write a day or time in a note, like <strong>dentist Fri 3pm</strong> or <strong>Mum’s birthday 12 Dec</strong>, and it appears in <strong>Coming up</strong> (the calendar button) and at the top of that day’s page.</li>
             <li>Write a word with <strong>#</strong> in front, like #garden, and it becomes a tag. Tap a tag to see every note with it.</li>
           </ul>
         </section>

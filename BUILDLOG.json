@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
+  "version": "1.6.0",
   "schemaVersion": 2,
   "stagesDone": [
     1,
@@ -7,9 +7,16 @@
     3,
     4,
     5,
-    6
+    6,
+    7
   ],
   "changelog": [
+    {
+      "date": "2026-10-31",
+      "version": "1.6.0",
+      "stage": 7,
+      "summary": "Agenda: a new calendar button in the header opens Coming up, a list of days and times found in notes, soonest first, grouped by day (Today, Tomorrow, In 5 days…), with the time in the margin ('all day' when there is none) and the date words underlined in red pencil. Found on the phone by plain rules: today/tonight/tomorrow, weekday names (this/next/on Friday; 'next Friday' means the Friday of the following week), '12 Nov', 'Nov 12th', '12/11' (day first, only after words like 'on'/'due' or at the start of a line), '12/11/26', '2026-11-12', 'the 1st', 'in 3 days/two weeks/a fortnight', 'this weekend', and times such as 3pm, 3:30 pm, 15:30 and noon. Words are read from the note's own page date. Ticked to-dos drop off; addresses, phone numbers and prices aren't mistaken for dates; a time with no date on the note's own day only counts if it's still ahead. Tapping an item opens its note; tapping a day heading opens that day. Every day page now shows a 'Planned for today / this day' slip listing notes from other days that point at it. 'Show the last two weeks' reveals recent past items. No schema change."
+    },
     {
       "date": "2026-10-26",
       "version": "1.5.0",
@@ -57,7 +64,8 @@
     "The to-do button is meant to keep the iOS keyboard up, and Return is meant to continue a list; both rely on iOS Safari key and pointer events that are unverified on a real iPhone. Tick boxes are 28 px tall (one ruled line), below Apple's 44 px guideline, though 42 px wide.",
     "Voice recording and playback are tested in headless Chromium with a fake microphone (WebM/Opus) only. On iPhone, MediaRecorder should produce AAC in MP4; recording, seeking, the microphone permission prompt (iOS may ask again each launch of a home-screen app), the wake lock and the orange-dot behaviour are unverified on a real device.",
     "Browser speech recognition (live transcription) is deliberately not offered: it couldn't be verified on a real iPhone, may not work in home-screen apps, and Apple may process the audio on its servers.",
-    "Collection rules are tuned for Australian formats (phone numbers, states, postcodes) and English phrasing; they will miss some addresses and ideas and may occasionally pick up something that isn't one. Collections are tested in headless Chromium only; how iOS opens tel:, mailto:, Apple Maps and outside links from a home-screen app is unverified on a real iPhone."
+    "Collection rules are tuned for Australian formats (phone numbers, states, postcodes) and English phrasing; they will miss some addresses and ideas and may occasionally pick up something that isn't one. Collections are tested in headless Chromium only; how iOS opens tel:, mailto:, Apple Maps and outside links from a home-screen app is unverified on a real iPhone.",
+    "Agenda rules are English-only and day-first (Australian) for numeric dates; they will miss some phrasings (e.g. 'next week', 'end of the month', time ranges keep only the first time) and can occasionally read a casual weekday mention ('I loved Friday') as a plan. 'Next Friday' is read as the Friday of the following week. Items can't be dismissed one by one; tick the to-do or edit the note. Tested in headless Chromium only."
   ],
-  "nextUp": "Stage 7: Agenda: detect dates and times in notes with on-device rules; show what's upcoming; tap to open the note."
+  "nextUp": "Stage 8: Places: attach the current location to a note (only when tapped, stored only on the phone) or type an address; a Places list with Open in Apple Maps links; no map tiles."
 }
